@@ -19,6 +19,10 @@
   --ease:cubic-bezier(.22,1,.36,1);
   --ease-out:cubic-bezier(.16,1,.3,1);
   --ease-soft:cubic-bezier(.16,1,.3,1);
+  /* iOS 风格：起始略快，结尾极其慵懒 */
+  --ease-lazy:cubic-bezier(.32,.72,0,1);
+  --dur-msg-enter:820ms;
+  --dur-scroll:520ms;
   --bg-rgb:10,10,12;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -302,7 +306,7 @@ svg{display:block}
   flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;
   display:flex;flex-direction:column;gap:12px;
   padding:18px max(16px,calc(50% - 400px)) 22px;
-  scroll-behavior:smooth;overscroll-behavior:contain;
+  overscroll-behavior:contain;
 }
 .msgs::-webkit-scrollbar{width:5px}
 .msgs::-webkit-scrollbar-thumb{background:rgba(255,255,255,.13);border-radius:3px}
@@ -310,9 +314,31 @@ svg{display:block}
 .day{text-align:center;font-size:11.5px;color:var(--dim2);
   padding:8px 0 2px;user-select:none;}
 
+/* 默认消息无动画 —— 增量渲染时，旧消息一动不动 */
 .msg{display:flex;flex-direction:column;align-items:flex-start;
-  max-width:100%;animation:msgIn .34s var(--ease);}
-@keyframes msgIn{from{opacity:0;transform:translateY(8px) scale(.985)}}
+  max-width:100%;}
+
+/* 只有新到达的消息才播放慵懒弹簧动画 */
+.msg.msg-enter{
+  animation:msgLazySpring var(--dur-msg-enter) var(--ease-lazy) both;
+  will-change:transform,opacity;
+}
+
+/* iOS 消息气泡入场：起始略快、中段收窄、末段极其慵懒地滑入
+   无过冲，位置严格收敛到 0 */
+@keyframes msgLazySpring{
+  0%{
+    opacity:0;
+    transform:translate3d(0, 28px, 0) scale(.955);
+  }
+  30%{
+    opacity:1;
+  }
+  100%{
+    opacity:1;
+    transform:translate3d(0, 0, 0) scale(1);
+  }
+}
 
 .msg.deleting{
   opacity:.35;
@@ -380,7 +406,7 @@ svg{display:block}
   will-change:opacity;
 }
 
-/* ===== 发送中：一道亮光浮过文字本身（不改文字颜色） ===== */
+/* ===== 发送中：一道亮光浮过文字本身 ===== */
 .msg-time.status-sending{
   position:relative;
   color:var(--dim);
@@ -457,7 +483,11 @@ svg{display:block}
 .empty-state{
   margin:auto;text-align:center;padding:40px 20px;
   color:var(--dim2);font-size:13px;line-height:1.9;
-  animation:msgIn .5s var(--ease) both;
+  animation:emptyFade .55s var(--ease-lazy) both;
+}
+@keyframes emptyFade{
+  from{opacity:0;transform:translateY(6px)}
+  to{opacity:1;transform:translateY(0)}
 }
 .empty-state .big{font-size:15px;color:var(--dim);margin-bottom:6px}
 .empty-state .empty-logo{
@@ -1030,7 +1060,7 @@ const $ = s => document.querySelector(s);
 /* ============================================================
  * 常量
  * ============================================================ */
-const UPLOAD_CONCURRENCY = 3;   // 文件上传最大并发数
+const UPLOAD_CONCURRENCY = 3;
 
 /* ============================================================
  * 加密
@@ -1039,10 +1069,6 @@ const te = new TextEncoder();
 const td = new TextDecoder();
 const SALT = te.encode('clip-v1-kdf-salt');
 
-/**
- * 从密码派生 AES-GCM 密钥。
- * extractable=false —— 密钥对象不可导出，XSS 无法把它带走。
- */
 async function deriveKey(password) {
   const base = await crypto.subtle.importKey(
     'raw', te.encode(password), 'PBKDF2', false, ['deriveKey']
@@ -1051,7 +1077,7 @@ async function deriveKey(password) {
     { name:'PBKDF2', salt:SALT, iterations:310000, hash:'SHA-256' },
     base,
     { name:'AES-GCM', length:256 },
-    false,               // 关键：不可导出
+    false,
     ['encrypt','decrypt']
   );
 }
@@ -1092,8 +1118,7 @@ async function decryptText(key, b64) {
 }
 
 /* ============================================================
- * 密钥持久化：IndexedDB 存不可导出 CryptoKey
- * 密码不落地，密钥 extractable=false，XSS 也带不走。
+ * 密钥持久化
  * ============================================================ */
 const KEY_DB    = 'flypaste-keys';
 const KEY_STORE = 'keys';
@@ -1129,7 +1154,7 @@ async function storeKey(key) {
     db.close();
     return true;
   } catch (e) {
-    console.warn('[FlyPaste] 无法持久化密钥，将退回到每次手动解锁', e);
+    console.warn('[FlyPaste] 无法持久化密钥', e);
     return false;
   }
 }
@@ -1184,6 +1209,7 @@ let convMenuEl = null;
 let convMenuAnchor = null;
 
 const decryptCache = new Map();
+const messageNodes = new Map();   // msg.id → DOM 元素，用于增量更新
 
 const APP_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path fill="currentColor" d="M26.07 3.996a3 3 0 0 0-.933.223h-.004c-.285.113-1.64.683-3.7 1.547l-7.382 3.109c-5.297 2.23-10.504 4.426-10.504 4.426l.062-.024s-.359.118-.734.375a2 2 0 0 0-.586.567c-.184.27-.332.683-.277 1.11c.09.722.558 1.155.894 1.394c.34.242.664.355.664.355h.008l4.883 1.645c.219.703 1.488 4.875 1.793 5.836c.18.574.355.933.574 1.207q.157.21.379.351a1 1 0 0 0 .246.106l-.05-.012c.015.004.027.016.038.02c.04.011.067.015.118.023c.773.234 1.394-.246 1.394-.246l.035-.028l2.883-2.625l4.832 3.707l.11.047c1.007.442 2.027.196 2.566-.238c.543-.437.754-.996.754-.996l.035-.09l3.734-19.129c.106-.472.133-.914.016-1.343a1.8 1.8 0 0 0-.781-1.047a1.87 1.87 0 0 0-1.067-.27m-.101 2.05c-.004.063.008.056-.02.177v.011l-3.699 18.93c-.016.027-.043.086-.117.145c-.078.062-.14.101-.465-.028l-5.91-4.531l-3.57 3.254l.75-4.79l9.656-9c.398-.37.265-.448.265-.448c.028-.454-.601-.133-.601-.133l-12.176 7.543l-.004-.02l-5.836-1.965v-.004l-.015-.003l.03-.012l.032-.016l.031-.011s5.211-2.196 10.508-4.426c2.652-1.117 5.324-2.242 7.379-3.11a807 807 0 0 1 3.66-1.53c.082-.032.043-.032.102-.032z"/></svg>`;
 
@@ -1271,17 +1297,13 @@ function showBootLogin(msg){
   pwInput.value = '';
 }
 
-/**
- * 锁屏到登录界面。
- * clearKey=true 时同时清掉 IndexedDB 里的密钥（主动登出用）。
- * 默认 false —— 会话过期时保留密钥，用户下次输入相同密码覆盖即可。
- */
 function lockScreen(msg = '', clearKey = false) {
   cryptoKey = null;
   if (clearKey) clearStoredKey().catch(() => {});
   disconnectWS();
   stopPolling();
   closeConvMenu();
+  messageNodes.clear();
   pendingFiles = [];
   renderAttachPreview();
   appEl.classList.add('gone');
@@ -1310,7 +1332,6 @@ async function unlock() {
     if (!res.ok) throw new Error('bad');
 
     cryptoKey = await deriveKey(pw);
-    // 密钥持久化到 IndexedDB（不存密码）
     await storeKey(cryptoKey);
 
     pwInput.value = '';
@@ -1388,6 +1409,7 @@ function dayLabel(ts) {
 function addDayDivider(ts) {
   const d = document.createElement('div');
   d.className = 'day';
+  d.dataset.day = new Date(ts).toDateString();
   d.textContent = dayLabel(ts);
   msgsEl.appendChild(d);
 }
@@ -1475,7 +1497,6 @@ function closeSidebarMobile() {
   }
 }
 
-// 主动登出：清 session 同时清掉本地密钥
 $('#logoutAllBtn').onclick = async () => {
   if (!await confirmDialog('退出所有设备？当前设备也会被登出。')) return;
   try { await api('POST', '/api/logout-all'); } catch {}
@@ -1641,6 +1662,7 @@ function openConvMenu(conv, anchor) {
     try {
       await api('DELETE', '/api/conversations/' + conv.id);
       decryptCache.clear();
+      messageNodes.clear();
       if (currentConv?.id === conv.id) {
         currentConv = null;
         messages = [];
@@ -1749,6 +1771,7 @@ async function openConversation(id) {
   if (!conv) return;
   currentConv = conv;
   decryptCache.clear();
+  messageNodes.clear();
   messages = [];
 
   $('#chatTitle').textContent = conv.name || '对话';
@@ -1776,25 +1799,13 @@ async function decodeMsg(m) {
   return { ...m, text };
 }
 
-async function refreshMessages(scroll) {
-  if (!currentConv) return;
-  try {
-    const { messages: raw } = await (await api(
-      'GET', `/api/conversations/${currentConv.id}/messages`
-    )).json();
-    const decoded = await Promise.all((raw || []).map(decodeMsg));
-    messages = decoded;
-    renderMessages();
-    if (scroll) scrollToBottom();
-  } catch (e) {
-    if (e.message !== '401') {
-      msgsEl.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败</div>';
-    }
-  }
-}
-
+/**
+ * 首屏 / 切换对话：全量渲染，不带入场动画（旧消息直接出现）。
+ */
 function renderMessages() {
   msgsEl.innerHTML = '';
+  messageNodes.clear();
+
   if (!messages.length) {
     msgsEl.innerHTML = `
       <div class="empty-state">
@@ -1804,6 +1815,7 @@ function renderMessages() {
       </div>`;
     return;
   }
+
   let lastDay = '';
   for (const m of messages) {
     const day = new Date(m.ts).toDateString();
@@ -1811,10 +1823,124 @@ function renderMessages() {
       lastDay = day;
       const d = document.createElement('div');
       d.className = 'day';
+      d.dataset.day = day;
       d.textContent = dayLabel(m.ts);
       msgsEl.appendChild(d);
     }
-    msgsEl.appendChild(renderMessage(m));
+    const el = renderMessage(m);
+    msgsEl.appendChild(el);
+    messageNodes.set(m.id, el);
+  }
+}
+
+/**
+ * 增量更新：
+ *   - 移除已删除的消息（保留原节点的收场由调用方处理）
+ *   - 原地更新改名后的文件消息
+ *   - 追加新消息，并让它们播放慵懒弹簧动画
+ * 已有消息一动不动，不会重放动画、不会闪烁。
+ */
+function applyMessagesUpdate(newList) {
+  const oldIds = new Set(messages.map(m => m.id));
+  const newIds = new Set(newList.map(m => m.id));
+
+  // 1. 移除已删除的
+  for (const oldId of oldIds) {
+    if (!newIds.has(oldId)) {
+      const el = messageNodes.get(oldId);
+      if (el) {
+        el.remove();
+        messageNodes.delete(oldId);
+      }
+    }
+  }
+
+  // 2. 原地更新已存在的（文件名变化）
+  const oldMap = new Map(messages.map(m => [m.id, m]));
+  for (const m of newList) {
+    const old = oldMap.get(m.id);
+    if (!old) continue;
+    if (m.t === 'file' && old.t === 'file' && old.n !== m.n) {
+      const el = messageNodes.get(m.id);
+      const nameEl = el && el.querySelector('.name');
+      if (nameEl) nameEl.textContent = m.n;
+    }
+  }
+
+  // 3. 追加新增的（带慵懒弹簧动画）
+  const added = newList.filter(m => !oldIds.has(m.id));
+  if (added.length) {
+    const lastDayEl = [...msgsEl.querySelectorAll('.day')].pop();
+    let lastDay = lastDayEl ? lastDayEl.dataset.day : '';
+
+    for (const m of added) {
+      const day = new Date(m.ts).toDateString();
+      if (day !== lastDay) {
+        lastDay = day;
+        const d = document.createElement('div');
+        d.className = 'day';
+        d.dataset.day = day;
+        d.textContent = dayLabel(m.ts);
+        msgsEl.appendChild(d);
+      }
+      const el = renderMessage(m);
+      el.classList.add('msg-enter');
+      msgsEl.appendChild(el);
+      messageNodes.set(m.id, el);
+    }
+  }
+
+  messages = newList;
+
+  if (!messages.length && !msgsEl.querySelector('.empty-state')) {
+    renderMessages();
+  }
+}
+
+async function refreshMessages(scroll) {
+  if (!currentConv) return;
+
+  // 清理本地失败的消息
+  const failedMsgs = messages.filter(m => m._status === 'failed');
+  if (failedMsgs.length) {
+    for (const fm of failedMsgs) {
+      decryptCache.delete(fm.id);
+      messageNodes.delete(fm.id);
+      const el = msgsEl.querySelector(`.msg[data-id="${CSS.escape(fm.id)}"]`);
+      if (el) {
+        el.style.transition = 'opacity .25s var(--ease), transform .3s var(--ease)';
+        el.style.opacity = '0';
+        el.style.transform = 'translateX(-14px) scale(.96)';
+        setTimeout(() => el.remove(), 280);
+      }
+    }
+    messages = messages.filter(m => m._status !== 'failed');
+    if (!messages.length) renderMessages();
+  }
+
+  if (messages.some(m => m._status === 'sending' || m._status === 'sent')) return;
+
+  try {
+    const { messages: raw } = await (await api(
+      'GET', `/api/conversations/${currentConv.id}/messages`
+    )).json();
+    const decoded = await Promise.all((raw || []).map(decodeMsg));
+
+    // 首屏 / 切换对话 → 全量渲染，旧消息不做动画
+    if (messageNodes.size === 0) {
+      messages = decoded;
+      renderMessages();
+      if (scroll) scrollToBottom(true);
+      return;
+    }
+
+    const nearBottom = isNearBottom();
+    applyMessagesUpdate(decoded);
+    if (scroll && nearBottom) scrollToBottom(false);
+  } catch (e) {
+    if (e.message !== '401' && !messageNodes.size) {
+      msgsEl.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败</div>';
+    }
   }
 }
 
@@ -1972,11 +2098,40 @@ function renderMessage(m) {
   return wrap;
 }
 
-function scrollToBottom() {
-  requestAnimationFrame(() => {
-    msgsEl.scrollTop = msgsEl.scrollHeight;
-  });
+/* ============================================================
+ * 滚动
+ * ============================================================ */
+function isNearBottom() {
+  return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120;
 }
+
+function scrollToBottom(instant) {
+  const target = msgsEl.scrollHeight;
+  if (instant) {
+    const prev = msgsEl.style.scrollBehavior;
+    msgsEl.style.scrollBehavior = 'auto';
+    msgsEl.scrollTop = target;
+    msgsEl.style.scrollBehavior = prev;
+  } else {
+    smoothScrollTo(msgsEl, target, 520);
+  }
+}
+
+function smoothScrollTo(el, target, duration) {
+  const start = el.scrollTop;
+  const dist = target - start;
+  if (Math.abs(dist) < 1) return;
+  const t0 = performance.now();
+  // 慵懒缓出：起始略快，末尾极慢
+  const ease = t => 1 - Math.pow(1 - t, 5);
+  const step = (now) => {
+    const p = Math.min((now - t0) / duration, 1);
+    el.scrollTop = start + dist * ease(p);
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 function downloadFile(m) {
   const a = document.createElement('a');
   a.href = `/api/files/${m.k}?name=${encodeURIComponent(m.n || 'file')}`;
@@ -2035,6 +2190,7 @@ async function deleteMessage(m, wrap) {
 
   if (m.id.startsWith('tmp-') || m._status === 'failed') {
     decryptCache.delete(m.id);
+    messageNodes.delete(m.id);
     messages = messages.filter(x => x.id !== m.id);
     wrap.classList.add('deleting');
     setTimeout(() => {
@@ -2055,6 +2211,7 @@ async function deleteMessage(m, wrap) {
   }
 
   decryptCache.delete(m.id);
+  messageNodes.delete(m.id);
   messages = messages.filter(x => x.id !== m.id);
 
   const others = [...msgsEl.querySelectorAll('.msg')].filter(el => el !== wrap);
@@ -2063,6 +2220,7 @@ async function deleteMessage(m, wrap) {
 
   wrap.remove();
 
+  // 其余消息慵懒上移填补空缺
   others.forEach(el => {
     const prev = prevPositions.get(el.dataset.id);
     if (prev == null) return;
@@ -2074,12 +2232,12 @@ async function deleteMessage(m, wrap) {
     el.style.transition = 'none';
     el.style.transform = `translateY(${delta}px)`;
     void el.offsetHeight;
-    el.style.transition = 'transform .4s cubic-bezier(.22,1,.36,1)';
+    el.style.transition = 'transform 520ms cubic-bezier(.32,.72,0,1)';
     el.style.transform = '';
     setTimeout(() => {
       el.style.transition = '';
       el.style.transform = '';
-    }, 440);
+    }, 560);
   });
 
   if (!msgsEl.querySelector('.msg')) renderMessages();
@@ -2114,13 +2272,15 @@ async function sendTextOptimistic(text) {
   const empty = msgsEl.querySelector('.empty-state');
   if (empty) empty.remove();
   const days = msgsEl.querySelectorAll('.day');
-  if (!days.length || days[days.length - 1].textContent !== dayLabel(now)) {
+  if (!days.length || days[days.length - 1].dataset.day !== new Date(now).toDateString()) {
     addDayDivider(now);
   }
 
   const msgEl = renderMessage(msgData);
+  msgEl.classList.add('msg-enter');
   msgsEl.appendChild(msgEl);
-  scrollToBottom();
+  messageNodes.set(tempId, msgEl);
+  scrollToBottom(false);
 
   try {
     const enc = await encryptText(cryptoKey, text);
@@ -2134,6 +2294,8 @@ async function sendTextOptimistic(text) {
     decryptCache.delete(tempId);
     decryptCache.set(res.id, text);
     msgEl.dataset.id = res.id;
+    messageNodes.delete(tempId);
+    messageNodes.set(res.id, msgEl);
 
     return { msgData, msgEl, resTs: res.ts };
   } catch (e) {
@@ -2288,16 +2450,13 @@ async function send() {
     if (text) {
       try {
         sentText = await sendTextOptimistic(text);
-      } catch (e) {
-        // 失败已在内部处理
-      }
+      } catch (e) {}
     }
     if (files.length) {
       await uploadAndSend(files);
     }
     await loadConversations();
   } catch (e) {
-    if (e.message !== '401') { /* 已内部提示 */ }
   } finally {
     sending = false;
     setSendBusy(false);
@@ -2324,7 +2483,7 @@ async function send() {
  * ============================================================ */
 function createUploadCard(file) {
   const wrap = document.createElement('div');
-  wrap.className = 'msg file';
+  wrap.className = 'msg file msg-enter';
 
   const card = document.createElement('div');
   card.className = 'file-card uploading';
@@ -2389,7 +2548,7 @@ async function uploadAndSend(files) {
   if (empty) empty.remove();
   const now = Date.now();
   const days = msgsEl.querySelectorAll('.day');
-  if (!days.length || days[days.length - 1].textContent !== dayLabel(now)) {
+  if (!days.length || days[days.length - 1].dataset.day !== new Date(now).toDateString()) {
     addDayDivider(now);
   }
 
@@ -2400,9 +2559,8 @@ async function uploadAndSend(files) {
     msgsEl.appendChild(item.wrap);
     return item;
   });
-  scrollToBottom();
+  scrollToBottom(false);
 
-  // 并发上传，最多 UPLOAD_CONCURRENCY 个同时进行
   await runWithConcurrency(
     items.map(item => () => uploadOne(item, convId, expSec)),
     UPLOAD_CONCURRENCY
@@ -2446,8 +2604,10 @@ async function uploadOne(item, convId, expSec) {
     };
     messages.push(msgData);
     const newEl = renderMessage(msgData);
+    // 原地替换上传卡片：不重放动画
     newEl.style.animation = 'none';
     wrap.replaceWith(newEl);
+    messageNodes.set(msgData.id, newEl);
   } catch (e) {
     card.classList.remove('uploading');
     card.classList.add('failed');
@@ -2495,13 +2655,12 @@ document.addEventListener('keydown', e => {
 /* ============================================================
  * 实时同步：WebSocket 推送 + 低频兜底轮询
  * ============================================================ */
-const POLL_FALLBACK_INTERVAL = 60_000;   // 兜底轮询 60 秒
-const WS_RECONNECT_BASE      = 1_000;    // 重连基础延迟
-const WS_RECONNECT_MAX       = 30_000;   // 重连最大延迟
-const SYNC_DEBOUNCE          = 300;      // 信号防抖
-const HEARTBEAT_INTERVAL     = 300_000;  // 心跳 5 分钟（省 DO 请求）
+const POLL_FALLBACK_INTERVAL = 60_000;
+const WS_RECONNECT_BASE      = 1_000;
+const WS_RECONNECT_MAX       = 30_000;
+const SYNC_DEBOUNCE          = 300;
+const HEARTBEAT_INTERVAL     = 300_000;
 
-/* ---------- 兜底轮询 ---------- */
 function startPolling() {
   stopPolling();
   pollTimer = setInterval(pollMessages, POLL_FALLBACK_INTERVAL);
@@ -2510,7 +2669,6 @@ function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
-/* ---------- WebSocket ---------- */
 let ws                   = null;
 let wsReconnectTimer     = null;
 let wsReconnectDelay     = WS_RECONNECT_BASE;
@@ -2543,7 +2701,6 @@ function connectWS() {
     try { msg = JSON.parse(e.data); } catch { return; }
 
     if (msg.type === 'hello') {
-      // 通道就绪，立即同步一次，防止断线期间漏消息
       debouncedSync();
     } else if (msg.type === 'sync') {
       if (currentConv && msg.convId === currentConv.id) {
@@ -2604,7 +2761,6 @@ function debouncedSync() {
     syncDebounceTimer = null;
     if (!currentConv) return;
     if (sending) return;
-    // 有本地未确认消息时跳过，兜底轮询会补上
     if (messages.some(m => m._status === 'sending' || m._status === 'sent')) return;
     refreshMessages(true).catch(() => {});
   }, SYNC_DEBOUNCE);
@@ -2623,61 +2779,23 @@ function stopHeartbeat() {
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 }
 
-/* ---------- 前后台切换 ---------- */
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (currentConv) {
-    // 回到前台：立即同步一次，并确保 WS 在线
     refreshMessages(true).catch(() => {});
     ensureWS();
   }
 });
 
-/* ---------- 兜底轮询（低频，仅防漏） ---------- */
 async function pollMessages() {
   if (!currentConv || document.hidden || pollInFlight) return;
   if (sending) return;
-
-  const failedMsgs = messages.filter(m => m._status === 'failed');
-  if (failedMsgs.length) {
-    for (const fm of failedMsgs) {
-      decryptCache.delete(fm.id);
-      const el = msgsEl.querySelector(`.msg[data-id="${CSS.escape(fm.id)}"]`);
-      if (el) {
-        el.style.transition = 'opacity .25s var(--ease), transform .3s var(--ease)';
-        el.style.opacity = '0';
-        el.style.transform = 'translateX(-14px) scale(.96)';
-        setTimeout(() => el.remove(), 280);
-      }
-    }
-    messages = messages.filter(m => m._status !== 'failed');
-    if (!messages.length) renderMessages();
-  }
-
-  if (messages.some(m => m._status === 'sending' || m._status === 'sent')) return;
-
   pollInFlight = true;
   try {
-    const { messages: raw } = await (await api(
-      'GET', `/api/conversations/${currentConv.id}/messages`
-    )).json();
-
-    if (sending || messages.some(m => m._status === 'sending' || m._status === 'sent')) {
-      return;
-    }
-
-    const list = raw || [];
-    const same = list.length === messages.length &&
-                 list.every((m, i) => m.id === messages[i].id);
-    if (!same) {
-      const decoded = await Promise.all(list.map(decodeMsg));
-      messages = decoded;
-      renderMessages();
-      scrollToBottom();
-      await loadConversations();
-    }
-  } catch {}
-  finally { pollInFlight = false; }
+    await refreshMessages(true);
+  } finally {
+    pollInFlight = false;
+  }
 }
 
 /* ============================================================
@@ -2697,11 +2815,6 @@ async function boot() {
   startPolling();
 }
 
-/**
- * 自动登录：
- *   1. IndexedDB 里有密钥 + 服务端 session 有效 → 直接进
- *   2. 否则显示登录界面
- */
 async function init() {
   const started = Date.now();
   const settle = async (fn) => {
@@ -2723,7 +2836,6 @@ async function init() {
         await boot();
         return;
       }
-      // session 已失效：清掉本地密钥，让用户重新登录
       await clearStoredKey();
     }
   } catch {}

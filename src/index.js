@@ -8,7 +8,7 @@ const JSON_MAX_BYTES = 1_000_000;
 const MAX_MESSAGES = 300;
 const MAX_CONV_NAME = 80;
 const MAX_MSG_NAME = 255;
-const GET_CONCURRENCY = 20;   // 文本消息并发
+const GET_CONCURRENCY = 6;   // 文本消息并发
 
 const SAFE_INLINE_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/gif',

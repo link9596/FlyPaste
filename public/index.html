@@ -1860,7 +1860,6 @@ async function decodeMsg(m) {
 
 /**
  * 首次进入 / 切换对话：全量渲染。
- * 不再预创建 loader，加载时才动态插入。
  */
 function renderMessages() {
   msgsEl.innerHTML = '';
@@ -2026,6 +2025,9 @@ async function refreshMessages(scroll) {
   if (!currentConv) return;
   if (loadingOlder) return;
 
+  // 【关键】捕获发起时的对话 ID，响应回来时校验
+  const convId = currentConv.id;
+
   const failedMsgs = messages.filter(m => m._status === 'failed');
   if (failedMsgs.length) {
     for (const fm of failedMsgs) {
@@ -2046,18 +2048,20 @@ async function refreshMessages(scroll) {
   if (messages.some(m => m._status === 'sending' || m._status === 'sent')) return;
 
   try {
-    const res = await api('GET', `/api/conversations/${currentConv.id}/messages`);
+    const res = await api('GET', `/api/conversations/${convId}/messages`);
     const data = await res.json();
     const raw = data.messages || [];
     const hasMore = !!data.hasMore;
     const decoded = await Promise.all(raw.map(decodeMsg));
+
+    // 【关键】响应回来时校验：对话已切换 → 丢弃本次响应
+    if (!currentConv || currentConv.id !== convId) return;
 
     if (messageNodes.size === 0) {
       messages = decoded;
       hasMoreOlder = hasMore;
       renderMessages();
       if (scroll) scrollToBottom(true);
-      // 首屏就没有更多历史 → 立即禁用顶部回弹
       if (!hasMoreOlder) {
         msgsEl.style.overscrollBehaviorY = 'none';
       }
@@ -2068,6 +2072,8 @@ async function refreshMessages(scroll) {
     applyMessagesUpdate(decoded);
     if (scroll && nearBottom) scrollToBottom(false);
   } catch (e) {
+    // 【关键】出错时也要校验
+    if (!currentConv || currentConv.id !== convId) return;
     if (e.message !== '401' && !messageNodes.size) {
       msgsEl.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败</div>';
     }
@@ -2076,23 +2082,19 @@ async function refreshMessages(scroll) {
 
 /* ============================================================
  * 懒加载：向服务端请求更早的消息
- * ============================================================
- * 关键：
- *   1. loader 动态创建 → 加载中短暂显示 spinner → 加载完成后立即移除
- *   2. 移除 loader 后，新消息占据它的位置，同步补偿 scrollTop 保证视觉不跳
- *   3. 若本次无新消息（说明全部加载完），loader 消失 → 用 FLIP 让下方消息平滑上移补位
- *   4. hasMoreOlder = false 时立即禁用顶部回弹，彻底阻止惯性触发
- */
+ * ============================================================ */
 async function loadOlderMessages() {
   if (!currentConv || loadingOlder || !hasMoreOlder) return;
   if (pollInFlight) return;
+
+  // 【关键】捕获发起时的对话 ID
+  const convId = currentConv.id;
 
   const oldest = messages.find(m => !m.id.startsWith('tmp-'));
   if (!oldest) return;
 
   loadingOlder = true;
 
-  // 动态创建 loader 到顶部
   const loader = document.createElement('div');
   loader.className = 'older-loader';
   loader.innerHTML = '<div class="spin"></div>';
@@ -2101,17 +2103,23 @@ async function loadOlderMessages() {
   const prevScrollTop = msgsEl.scrollTop;
 
   msgsEl.insertBefore(loader, msgsEl.firstChild);
-
-  // 同步补偿：让下面内容视觉不动
   msgsEl.scrollTop = prevScrollTop + (msgsEl.scrollHeight - prevScrollHeight);
 
   try {
     const res = await api('GET',
-      `/api/conversations/${currentConv.id}/messages?before=${encodeURIComponent(oldest.id)}`
+      `/api/conversations/${convId}/messages?before=${encodeURIComponent(oldest.id)}`
     );
     const data = await res.json();
     const olderRaw = data.messages || [];
-    hasMoreOlder = !!data.hasMore;
+    const newHasMore = !!data.hasMore;
+
+    // 【关键】响应回来时校验：对话已切换 → 丢弃
+    if (!currentConv || currentConv.id !== convId) {
+      loader.remove();
+      return;
+    }
+
+    hasMoreOlder = newHasMore;
 
     const olderDecoded = olderRaw.length
       ? await Promise.all(olderRaw.map(decodeMsg))
@@ -2119,7 +2127,6 @@ async function loadOlderMessages() {
     const existingIds = new Set(messages.map(m => m.id));
     const toInsert = olderDecoded.filter(m => !existingIds.has(m.id));
 
-    // 处理第一天分隔线
     const firstDayEl = msgsEl.querySelector('.day');
     if (firstDayEl && toInsert.length) {
       if (new Date(toInsert[0].ts).toDateString() === firstDayEl.dataset.day) {
@@ -2127,12 +2134,10 @@ async function loadOlderMessages() {
       }
     }
 
-    // 记录移除 loader 前的状态
     const beforeH = msgsEl.scrollHeight;
     const beforeT = msgsEl.scrollTop;
 
     if (toInsert.length) {
-      // 【有历史消息】：移除 loader，新消息占据 loader 位置，不补位
       const fragment = document.createDocumentFragment();
       let lastDay = '';
       let animIdx = 0;
@@ -2154,21 +2159,13 @@ async function loadOlderMessages() {
         messageNodes.set(m.id, el);
       }
 
-      // 移除 loader（会让下面内容上移 44px）
       loader.remove();
-
-      // 立即插入新消息到顶部（占据原 loader 的位置）
       msgsEl.insertBefore(fragment, msgsEl.firstChild);
-
-      // 同步补偿 scrollTop
-      // 效果：旧消息视觉位置完全不动，loader 的位置被新消息顶替
       msgsEl.scrollTop = beforeT + (msgsEl.scrollHeight - beforeH);
 
-      // 更新 messages 数组
       messages = toInsert.concat(messages)
         .sort((a, b) => (a.ts || 0) - (b.ts || 0));
     } else {
-      // 【无历史消息】：loader 移除后，用 FLIP 让下面消息平滑上移补位
       const keepEls = [...msgsEl.querySelectorAll('.msg')];
       const prevPositions = new Map();
       keepEls.forEach(el => {
@@ -2179,7 +2176,6 @@ async function loadOlderMessages() {
 
       loader.remove();
 
-      // FLIP 补偿：让消息从"旧位置"平滑过渡到"新位置"
       keepEls.forEach(el => {
         const id = el.dataset.id;
         if (!id) return;
@@ -2202,22 +2198,25 @@ async function loadOlderMessages() {
       });
     }
 
-    // 全部加载完 → 禁用顶部回弹，彻底防止惯性触发
     if (!hasMoreOlder) {
       msgsEl.style.overscrollBehaviorY = 'none';
     }
 
   } catch (e) {
-    loader.remove();
+    if (loader.isConnected) loader.remove();
+    if (!currentConv || currentConv.id !== convId) return;
     if (e.message !== '401') showToast('加载更早消息失败', 'error');
   } finally {
-    loadingOlder = false;
+    // 【关键】只有当对话没变时才重置 loadingOlder，
+    // 避免把新对话的"正在加载"状态错误清空
+    if (currentConv && currentConv.id === convId) {
+      loadingOlder = false;
+    }
   }
 }
 
-// 滚动接近顶部时触发懒加载
 msgsEl.addEventListener('scroll', () => {
-  if (!hasMoreOlder) return;   // 全部加载完 → 直接返回，不再触发
+  if (!hasMoreOlder) return;
   if (loadingOlder) return;
   if (msgsEl.scrollTop < LAZY_TRIGGER_PX) {
     loadOlderMessages();

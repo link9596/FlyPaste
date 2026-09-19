@@ -5,10 +5,12 @@ const LOGIN_WINDOW_MS = 60_000;
 const LOGIN_MAX_ATTEMPTS = 5;
 
 const JSON_MAX_BYTES = 1_000_000;
-const MAX_MESSAGES = 120;
+const MAX_MESSAGES = 300;
 const MAX_CONV_NAME = 80;
 const MAX_MSG_NAME = 255;
-const GET_CONCURRENCY = 20;   // 文本消息并发
+const GET_CONCURRENCY = 20;
+const PAGE_SIZE = 50;                 // 懒加载每页条数
+const MAX_TS = 9999999999999;         // 13 位数字上限，用于反向时间戳
 
 const SAFE_INLINE_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
@@ -142,10 +144,6 @@ async function getSession(env, request) {
   return { sid, key, exp, tenant };
 }
 
-/**
- * 如果会话剩余时间不足一半，就更新 R2 里的 exp 并返回新的 Set-Cookie。
- * 否则返回 null（表示不需要续期）。
- */
 async function maybeRenew(env, sess) {
   if (!sess) return null;
   const remain = sess.exp - Date.now();
@@ -237,11 +235,7 @@ const fileKey      = (t, uuid) => `${t}/file/${uuid}`;
 
 /* ============================================================
  * 同步信号广播
- * ============================================================
- * 向指定 tenant 的 SyncHub 发送一条广播指令，
- * 由 DO 推送给该租户下所有在线的 WebSocket 设备。
- * 广播是"尽力而为"：失败静默，绝不影响主业务。
- */
+ * ============================================================ */
 async function broadcastSignal(env, tenant, payload) {
   try {
     if (!env.SYNC_HUB) return;
@@ -373,26 +367,48 @@ async function deleteConversation(env, convId, tenant) {
 
 /* ============================================================
  * 消息
- * ============================================================ */
-async function listMessages(env, convId, tenant) {
-  const arr = [];
+ * ============================================================
+ * 消息 key 格式：{tenant}/conv/{cid}/msg/{reverse_ts}-{uuid8}
+ *   reverse_ts = MAX_TS - 真实毫秒时间戳
+ *   R2 list() 升序 → 最新消息排最前
+ *
+ * listMessages 支持分页：
+ *   - 无 before：返回最新 PAGE_SIZE 条
+ *   - before=xxx：返回严格早于 xxx 的 PAGE_SIZE 条
+ *   返回按时间顺序（最旧 → 最新），与旧版本一致
+ */
+async function listMessages(env, convId, tenant, before) {
   const prefix = convMsgPrefix(tenant, convId);
-  for await (const o of listAll(env.BUCKET, { prefix })) {
-    arr.push(o);
-  }
-  arr.sort((a, b) => a.key.localeCompare(b.key));
+  const startAfter = before ? `${prefix}${before}` : undefined;
 
-  const recent = arr.length > MAX_MESSAGES ? arr.slice(-MAX_MESSAGES) : arr;
+  // 多拿一条判断是否还有更多
+  const page = await env.BUCKET.list({
+    prefix,
+    startAfter,
+    limit: PAGE_SIZE + 1,
+    include: ['customMetadata'],
+  });
 
-  // 第一遍：文件消息 meta 直接用，文本消息排入待拉取队列
-  const result = new Array(recent.length);
+  const hasMore = page.objects.length > PAGE_SIZE;
+  const objects = page.objects.slice(0, PAGE_SIZE);
+
+  // 反转为时间顺序（最旧 → 最新），和旧版一致
+  const ordered = objects.slice().reverse();
+
+  const result = new Array(ordered.length);
   const textTasks = [];
 
-  for (let i = 0; i < recent.length; i++) {
-    const o = recent[i];
+  for (let i = 0; i < ordered.length; i++) {
+    const o = ordered[i];
     const meta = o.customMetadata || {};
     const id = o.key.slice(prefix.length);
-    const ts = parseTs(meta.ts, parseTs(id.split('-')[0], 0));
+
+    // 优先用 meta.ts，兜底从反向 id 反推
+    let ts = parseTs(meta.ts, 0);
+    if (!ts) {
+      const reverseTs = parseTs(id.split('-')[0], 0);
+      if (reverseTs > 0) ts = MAX_TS - reverseTs;
+    }
 
     if (meta.t === 'file') {
       result[i] = {
@@ -408,7 +424,7 @@ async function listMessages(env, convId, tenant) {
     }
   }
 
-  // 第二遍：文本消息分批并发 get
+  // 文本消息分批并发 get
   for (let i = 0; i < textTasks.length; i += GET_CONCURRENCY) {
     const batch = textTasks.slice(i, i + GET_CONCURRENCY);
     await Promise.all(batch.map(async ({ idx, key, id, ts }) => {
@@ -423,7 +439,7 @@ async function listMessages(env, convId, tenant) {
   }
 
   const messages = result.filter(Boolean);
-  return json({ messages });
+  return json({ messages, hasMore });
 }
 
 async function createMessage(env, request, convId, tenant) {
@@ -435,7 +451,8 @@ async function createMessage(env, request, convId, tenant) {
   catch (e) { return e instanceof Response ? e : json({ error: 'bad request' }, 400); }
 
   const now = Date.now();
-  const msgId = `${now}-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
+  const reverseTs = MAX_TS - now;   // 反转时间戳：越小表示越新
+  const msgId = `${reverseTs}-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
   const key = convMsgKey(tenant, convId, msgId);
 
   if (body.t === 'text') {
@@ -491,8 +508,10 @@ async function trimMessages(env, tenant, convId) {
     arr.push(o);
   }
   if (arr.length <= MAX_MESSAGES) return;
+
+  // 反向时间戳下，升序 = 最新在前，所以要删的是后面（最旧的）
   arr.sort((a, b) => a.key.localeCompare(b.key));
-  const toDelete = arr.slice(0, arr.length - MAX_MESSAGES);
+  const toDelete = arr.slice(MAX_MESSAGES);
 
   for (const o of toDelete) {
     const meta = o.customMetadata || {};
@@ -561,10 +580,7 @@ async function patchMessage(env, request, convId, msgId, tenant) {
 
 /* ============================================================
  * Durable Object：WebSocket 同步中枢
- * ============================================================
- * 每个 tenant 一个实例，管理该租户所有在线设备的 WebSocket 连接。
- * 使用 WebSocket Hibernation API —— 空闲连接不计 Duration 费用。
- */
+ * ============================================================ */
 export class SyncHub {
   constructor(state, env) {
     this.state = state;
@@ -574,7 +590,6 @@ export class SyncHub {
   async fetch(request) {
     const url = new URL(request.url);
 
-    // 内部广播入口
     if (url.pathname === '/broadcast' && request.method === 'POST') {
       let payload = null;
       try { payload = await request.json(); } catch {}
@@ -584,7 +599,6 @@ export class SyncHub {
       });
     }
 
-    // WebSocket 升级
     const upgrade = request.headers.get('Upgrade');
     if (upgrade !== 'websocket') {
       return new Response('expected websocket', { status: 426 });
@@ -593,10 +607,8 @@ export class SyncHub {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
-    // 关键：Hibernation API，连接空闲时 DO 可休眠
     this.state.acceptWebSocket(server);
 
-    // 连接建立时立刻回一个 hello，让客户端知道通道就绪
     try {
       server.send(JSON.stringify({ type: 'hello', ts: Date.now() }));
     } catch {}
@@ -615,10 +627,7 @@ export class SyncHub {
     return sent;
   }
 
-  // ---- Hibernation 回调 ----
-
   async webSocketMessage(ws, msg) {
-    // 只处理心跳，业务逻辑一律走 HTTP API
     if (msg === 'ping') {
       try { ws.send('pong'); } catch {}
     }
@@ -764,10 +773,8 @@ export default {
       return stub.fetch(request);
     }
 
-    // 会话不足一半时续期，得到新的 Set-Cookie（或 null）
     const renewCookie = await maybeRenew(env, sess);
 
-    // 统一包装：需要续期时给所有响应追加 Set-Cookie
     const respond = (resp) => {
       if (!renewCookie) return resp;
       const headers = new Headers(resp.headers);
@@ -800,7 +807,15 @@ export default {
     if (msgsMatch) {
       const convId = safeDecode(msgsMatch[1]);
       if (!isValidConvId(convId)) return json({ error: 'bad id' }, 400);
-      if (request.method === 'GET')  return respond(await listMessages(env, convId, tenant));
+
+      if (request.method === 'GET') {
+        // 分页游标：客户端传最旧消息的 id
+        const before = url.searchParams.get('before') || '';
+        if (before && !isValidMsgId(before)) {
+          return json({ error: 'bad before' }, 400);
+        }
+        return respond(await listMessages(env, convId, tenant, before));
+      }
       if (request.method === 'POST') return respond(await createMessage(env, request, convId, tenant));
       return json({ error: 'method not allowed' }, 405);
     }

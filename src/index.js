@@ -1,8 +1,7 @@
 const SESSION_TTL = 60 * 60 * 24 * 7;
 const SESSION_TTL_MS = SESSION_TTL * 1000;
 
-const LOGIN_WINDOW_MS = 60_000;
-const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_RECORD_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // 失败记录保留 7 天
 
 const JSON_MAX_BYTES = 1_000_000;
 const MAX_MESSAGES = 300;
@@ -168,8 +167,26 @@ function clientIp(request) {
 }
 
 /* ============================================================
- * 登录限流
- * ============================================================ */
+ * 登录限流：指数回退
+ * ============================================================
+ * 累计失败次数 → 锁定时长：
+ *   1-4 次：不锁
+ *   5 次：1 分钟
+ *   6 次：2 分钟
+ *   7 次：5 分钟
+ *   8 次：10 分钟
+ *   9 次及以上：30 分钟
+ * 成功登录后清空记录。
+ */
+function getLockMs(failCount) {
+  if (failCount <= 4) return 0;
+  if (failCount === 5) return 60 * 1000;
+  if (failCount === 6) return 2 * 60 * 1000;
+  if (failCount === 7) return 5 * 60 * 1000;
+  if (failCount === 8) return 10 * 60 * 1000;
+  return 30 * 60 * 1000;
+}
+
 async function loginRateLimit(env, ip) {
   const key = 'ratelimit/login/' + ip.replace(/[^a-fA-F0-9:.]/g, '_');
   const now = Date.now();
@@ -178,20 +195,33 @@ async function loginRateLimit(env, ip) {
     const obj = await env.BUCKET.get(key);
     if (obj) data = JSON.parse(await obj.text());
   } catch {}
-  if (!data || typeof data !== 'object' || !Number.isFinite(data.r) || now > data.r) {
-    data = { c: 0, r: now + LOGIN_WINDOW_MS };
+
+  if (!data || typeof data !== 'object') {
+    data = { c: 0, r: 0 };
   }
-  data.c = (Number.isFinite(data.c) ? data.c : 0) + 1;
-  if (data.c > LOGIN_MAX_ATTEMPTS) {
+  data.c = Number.isFinite(data.c) ? data.c : 0;
+  data.r = Number.isFinite(data.r) ? data.r : 0;
+
+  // 锁定期内：直接拒绝，不累加计数
+  if (now < data.r) {
     const retryAfter = Math.max(1, Math.ceil((data.r - now) / 1000));
     return { blocked: true, retryAfter, key, data };
   }
+
   return { blocked: false, key, data };
 }
 
 async function recordAttempt(env, key, data) {
+  data.c = (Number.isFinite(data.c) ? data.c : 0) + 1;
+  const lockMs = getLockMs(data.c);
+  const now = Date.now();
+  data.r = lockMs > 0 ? now + lockMs : 0;
+
+  // 记录过期时间：至少 7 天，且大于锁定期 1 小时
+  const exp = now + Math.max(LOGIN_RECORD_TTL_MS, lockMs + 60 * 60 * 1000);
+
   await env.BUCKET.put(key, JSON.stringify(data), {
-    customMetadata: { exp: String(data.r + 60_000) },
+    customMetadata: { exp: String(exp) },
   });
 }
 
@@ -709,6 +739,7 @@ export default {
         return json({ error: 'unauthorized' }, 401);
       }
 
+      // 登录成功：清空失败记录
       await env.BUCKET.delete(rl.key).catch(() => {});
 
       const sid =

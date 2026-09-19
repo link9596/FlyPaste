@@ -318,17 +318,23 @@ svg{display:block}
 .msg{display:flex;flex-direction:column;align-items:flex-start;
   max-width:100%;}
 
-/* 顶部懒加载指示器 */
+/* 顶部懒加载指示器：固定 44px 高度，通过 opacity 切换显隐。
+   高度恒定，所以下方消息位置完全不受影响。 */
 .older-loader{
   display:flex;
   justify-content:center;
   align-items:center;
-  padding:14px 0;
+  height:44px;
+  flex-shrink:0;
+  gap:8px;
   color:var(--dim2);
   font-size:12px;
-  gap:8px;
-  flex-shrink:0;
-  min-height:44px;
+  opacity:0;
+  transition:opacity .35s var(--ease);
+  pointer-events:none;
+}
+.older-loader.active{
+  opacity:1;
 }
 .older-loader .spin{
   width:16px;height:16px;border-radius:50%;
@@ -340,12 +346,6 @@ svg{display:block}
   color:var(--dim2);
   font-size:11.5px;
   letter-spacing:.06em;
-  opacity:.6;
-  animation:doneFadeIn .4s var(--ease-lazy) both;
-}
-@keyframes doneFadeIn{
-  from{opacity:0;transform:translateY(-4px)}
-  to{opacity:.6;transform:translateY(0)}
 }
 
 /* 新消息入场（从下方 28px 上浮） */
@@ -1110,8 +1110,8 @@ const ENTER_STAGGER_MAX  = 1200;
 const ANIMATE_LAST_N     = 12;
 const PENDING_GRACE_MS   = 6000;
 const LAZY_TRIGGER_PX    = 200;
-const OLD_ENTER_STAGGER  = 25;    // 旧消息前插动画错峰间隔
-const OLD_ENTER_MAX      = 300;   // 旧消息错峰上限
+const OLD_ENTER_STAGGER  = 25;
+const OLD_ENTER_MAX      = 300;
 
 /* ============================================================
  * 加密
@@ -1836,6 +1836,8 @@ async function openConversation(id) {
   messages = [];
   hasMoreOlder = false;
   loadingOlder = false;
+  // 重置顶部回弹设置，回到默认（允许回弹）
+  msgsEl.style.overscrollBehaviorY = '';
 
   $('#chatTitle').textContent = conv.name || '对话';
   renderConvList();
@@ -1864,8 +1866,8 @@ async function decodeMsg(m) {
 
 /**
  * 首次进入 / 切换对话：全量渲染。
- * 只对最后 ANIMATE_LAST_N 条应用错峰入场动画。
- * 顶部保留懒加载指示器。
+ * 顶部固定一个 44px 的 loader 占位（opacity 0，隐形但占高度），
+ * 保证加载时/加载完成后下方消息位置完全不动。
  */
 function renderMessages() {
   msgsEl.innerHTML = '';
@@ -1881,10 +1883,9 @@ function renderMessages() {
     return;
   }
 
-  // 顶部懒加载指示器
+  // 顶部固定高度占位（opacity 0，隐形但占 44px 高度）
   const loader = document.createElement('div');
   loader.className = 'older-loader';
-  loader.hidden = true;
   loader.innerHTML = '<div class="spin"></div>';
   msgsEl.appendChild(loader);
 
@@ -2069,6 +2070,10 @@ async function refreshMessages(scroll) {
       hasMoreOlder = hasMore;
       renderMessages();
       if (scroll) scrollToBottom(true);
+      // 首屏就没有更多历史了 → 立即禁用顶部回弹
+      if (!hasMoreOlder) {
+        msgsEl.style.overscrollBehaviorY = 'none';
+      }
       return;
     }
 
@@ -2084,7 +2089,12 @@ async function refreshMessages(scroll) {
 
 /* ============================================================
  * 懒加载：向服务端请求更早的消息
- * ============================================================ */
+ * ============================================================
+ * 关键点：
+ *   1. loader 高度恒定 44px（opacity 控制显隐），不会因加载/完成而改变布局
+ *   2. scrollTop 补偿保证下方消息视觉位置完全不动
+ *   3. 全部加载完后 overscrollBehaviorY = 'none'，彻底禁用顶部回弹
+ */
 async function loadOlderMessages() {
   if (!currentConv || loadingOlder || !hasMoreOlder) return;
   if (pollInFlight) return;
@@ -2096,8 +2106,7 @@ async function loadOlderMessages() {
 
   const loader = msgsEl.querySelector('.older-loader');
   if (loader) {
-    loader.hidden = false;
-    loader.className = 'older-loader';
+    loader.classList.add('active');
     loader.innerHTML = '<div class="spin"></div>';
   }
 
@@ -2112,85 +2121,85 @@ async function loadOlderMessages() {
     const olderRaw = data.messages || [];
     hasMoreOlder = !!data.hasMore;
 
-    if (!olderRaw.length) return;
+    if (olderRaw.length) {
+      const olderDecoded = await Promise.all(olderRaw.map(decodeMsg));
+      const existingIds = new Set(messages.map(m => m.id));
+      const toInsert = olderDecoded.filter(m => !existingIds.has(m.id));
 
-    const olderDecoded = await Promise.all(olderRaw.map(decodeMsg));
+      if (toInsert.length) {
+        // 处理第一天分隔线
+        const firstDayEl = msgsEl.querySelector('.day');
+        if (firstDayEl) {
+          const firstOldDay = new Date(toInsert[0].ts).toDateString();
+          if (firstOldDay === firstDayEl.dataset.day) {
+            firstDayEl.remove();
+          }
+        }
 
-    const existingIds = new Set(messages.map(m => m.id));
-    const toInsert = olderDecoded.filter(m => !existingIds.has(m.id));
+        // 构建 fragment（带前插入场动画）
+        const fragment = document.createDocumentFragment();
+        let lastDay = '';
+        let animIdx = 0;
+        for (const m of toInsert) {
+          const day = new Date(m.ts).toDateString();
+          if (day !== lastDay) {
+            lastDay = day;
+            const d = document.createElement('div');
+            d.className = 'day';
+            d.dataset.day = day;
+            d.textContent = dayLabel(m.ts);
+            fragment.appendChild(d);
+          }
+          const el = renderMessage(m);
+          el.classList.add('msg-enter-old');
+          el.style.animationDelay = `${Math.min(animIdx * OLD_ENTER_STAGGER, OLD_ENTER_MAX)}ms`;
+          animIdx++;
+          fragment.appendChild(el);
+          messageNodes.set(m.id, el);
+        }
 
-    if (!toInsert.length) return;
+        // 插入到 loader 之后（loader 位置不动，消息从 loader 下方"长"出来）
+        if (loader) {
+          msgsEl.insertBefore(fragment, loader.nextSibling);
+        } else {
+          msgsEl.insertBefore(fragment, msgsEl.firstChild);
+        }
 
-    // 如果第一条旧消息和现有第一个日期分隔线同一天，暂时移除那个分隔线
-    const firstDayEl = msgsEl.querySelector('.day');
-    if (firstDayEl && toInsert.length) {
-      const firstOldDay = new Date(toInsert[0].ts).toDateString();
-      if (firstOldDay === firstDayEl.dataset.day) {
-        firstDayEl.remove();
+        // 前插到 messages 数组
+        messages = toInsert.concat(messages)
+          .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+
+        // scrollTop 补偿：保持用户视野中内容不动
+        requestAnimationFrame(() => {
+          const newScrollHeight = msgsEl.scrollHeight;
+          msgsEl.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+        });
       }
     }
 
-    // 构建 DOM fragment（带前插入场动画）
-    const fragment = document.createDocumentFragment();
-    let lastDay = '';
-    let animIdx = 0;
-    for (const m of toInsert) {
-      const day = new Date(m.ts).toDateString();
-      if (day !== lastDay) {
-        lastDay = day;
-        const d = document.createElement('div');
-        d.className = 'day';
-        d.dataset.day = day;
-        d.textContent = dayLabel(m.ts);
-        fragment.appendChild(d);
-      }
-      const el = renderMessage(m);
-      // 旧消息入场动画：从上方下沉 + 淡化 + 缩放，带错峰
-      el.classList.add('msg-enter-old');
-      el.style.animationDelay = `${Math.min(animIdx * OLD_ENTER_STAGGER, OLD_ENTER_MAX)}ms`;
-      animIdx++;
-      fragment.appendChild(el);
-      messageNodes.set(m.id, el);
+    // 全部加载完 → 禁用顶部回弹，防止惯性再次触发
+    if (!hasMoreOlder) {
+      msgsEl.style.overscrollBehaviorY = 'none';
     }
-
-    // 插入到 loader 之后（也就是所有消息之前）
-    const anchor = loader ? loader.nextSibling : msgsEl.firstChild;
-    if (anchor) {
-      msgsEl.insertBefore(fragment, anchor);
-    } else {
-      msgsEl.appendChild(fragment);
-    }
-
-    // 前插到 messages 数组
-    messages = toInsert.concat(messages)
-      .sort((a, b) => (a.ts || 0) - (b.ts || 0));
-
-    // 恢复滚动位置（放在下一帧，等布局稳定）
-    requestAnimationFrame(() => {
-      const newScrollHeight = msgsEl.scrollHeight;
-      msgsEl.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
-    });
 
   } catch (e) {
     if (e.message !== '401') showToast('加载更早消息失败', 'error');
   } finally {
     loadingOlder = false;
 
-    // 处理 loader 状态：加载中隐藏 / 全部加载完显示"已无更早消息"
     if (loader) {
       if (!hasMoreOlder) {
-        // 显示"已无更早消息"提示，1.8s 后隐藏
-        loader.hidden = false;
-        loader.className = 'older-loader';
+        // 显示"已无更早消息"1.8 秒后淡出（loader 高度保持）
+        loader.classList.add('active');
         loader.innerHTML = '<span class="done-text">— 已无更早消息 —</span>';
         setTimeout(() => {
-          loader.hidden = true;
-          loader.innerHTML = '<div class="spin"></div>';
+          if (loader && loader.isConnected) {
+            loader.classList.remove('active');
+          }
         }, 1800);
       } else {
-        loader.hidden = true;
-        loader.className = 'older-loader';
-        loader.innerHTML = '<div class="spin"></div>';
+        // spinner 淡出（loader 高度保持，下方消息不动）
+        loader.classList.remove('active');
       }
     }
   }
@@ -2198,7 +2207,8 @@ async function loadOlderMessages() {
 
 // 滚动接近顶部时触发懒加载
 msgsEl.addEventListener('scroll', () => {
-  if (!hasMoreOlder || loadingOlder) return;
+  if (!hasMoreOlder) return;   // 全部加载完 → 不再触发
+  if (loadingOlder) return;
   if (msgsEl.scrollTop < LAZY_TRIGGER_PX) {
     loadOlderMessages();
   }

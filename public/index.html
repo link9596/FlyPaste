@@ -21,6 +21,7 @@
   --ease-soft:cubic-bezier(.16,1,.3,1);
   --ease-lazy:cubic-bezier(.32,.72,0,1);
   --dur-msg-enter:820ms;
+  --dur-shift:520ms;
   --dur-scroll:620ms;
   --bg-rgb:10,10,12;
 }
@@ -317,9 +318,6 @@ svg{display:block}
   max-width:100%;}
 
 /* 慵懒弹簧入场：所有"新出现"的消息都会播这条动画
-   - 初始加载：错峰播，从底部依次冒出来
-   - 收到新消息：只有新消息播，旧消息保持不动
-   - 自己发送：新消息立即播
    无过冲，位置严格收敛到 0 */
 .msg.msg-enter{
   animation:msgLazySpring var(--dur-msg-enter) var(--ease-lazy) both;
@@ -1059,9 +1057,9 @@ const $ = s => document.querySelector(s);
  * 常量
  * ============================================================ */
 const UPLOAD_CONCURRENCY = 3;
-// 初始加载时，每条消息的入场错峰（ms），总错峰上限（ms）
 const ENTER_STAGGER = 45;
 const ENTER_STAGGER_MAX = 520;
+const PENDING_GRACE_MS  = 6000;
 
 /* ============================================================
  * 加密
@@ -1211,6 +1209,7 @@ let convMenuAnchor = null;
 
 const decryptCache = new Map();
 const messageNodes = new Map();
+const pendingLocalIds = new Map();
 
 const APP_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path fill="currentColor" d="M26.07 3.996a3 3 0 0 0-.933.223h-.004c-.285.113-1.64.683-3.7 1.547l-7.382 3.109c-5.297 2.23-10.504 4.426-10.504 4.426l.062-.024s-.359.118-.734.375a2 2 0 0 0-.586.567c-.184.27-.332.683-.277 1.11c.09.722.558 1.155.894 1.394c.34.242.664.355.664.355h.008l4.883 1.645c.219.703 1.488 4.875 1.793 5.836c.18.574.355.933.574 1.207q.157.21.379.351a1 1 0 0 0 .246.106l-.05-.012c.015.004.027.016.038.02c.04.011.067.015.118.023c.773.234 1.394-.246 1.394-.246l.035-.028l2.883-2.625l4.832 3.707l.11.047c1.007.442 2.027.196 2.566-.238c.543-.437.754-.996.754-.996l.035-.09l3.734-19.129c.106-.472.133-.914.016-1.343a1.8 1.8 0 0 0-.781-1.047a1.87 1.87 0 0 0-1.067-.27m-.101 2.05c-.004.063.008.056-.02.177v.011l-3.699 18.93c-.016.027-.043.086-.117.145c-.078.062-.14.101-.465-.028l-5.91-4.531l-3.57 3.254l.75-4.79l9.656-9c.398-.37.265-.448.265-.448c.028-.454-.601-.133-.601-.133l-12.176 7.543l-.004-.02l-5.836-1.965v-.004l-.015-.003l.03-.012l.032-.016l.031-.011s5.211-2.196 10.508-4.426c2.652-1.117 5.324-2.242 7.379-3.11a807 807 0 0 1 3.66-1.53c.082-.032.043-.032.102-.032z"/></svg>`;
 
@@ -1305,6 +1304,7 @@ function lockScreen(msg = '', clearKey = false) {
   stopPolling();
   closeConvMenu();
   messageNodes.clear();
+  pendingLocalIds.clear();
   pendingFiles = [];
   renderAttachPreview();
   appEl.classList.add('gone');
@@ -1664,6 +1664,7 @@ function openConvMenu(conv, anchor) {
       await api('DELETE', '/api/conversations/' + conv.id);
       decryptCache.clear();
       messageNodes.clear();
+      pendingLocalIds.clear();
       if (currentConv?.id === conv.id) {
         currentConv = null;
         messages = [];
@@ -1773,6 +1774,7 @@ async function openConversation(id) {
   currentConv = conv;
   decryptCache.clear();
   messageNodes.clear();
+  pendingLocalIds.clear();
   messages = [];
 
   $('#chatTitle').textContent = conv.name || '对话';
@@ -1801,9 +1803,7 @@ async function decodeMsg(m) {
 }
 
 /**
- * 首次进入 / 切换对话：全量渲染。
- * 所有消息都带 msg-enter，并按顺序错峰播放入场动画，
- * 视觉上从底部依次"冒出来"，错峰上限 520ms。
+ * 首次进入 / 切换对话：全量渲染，按顺序错峰入场。
  */
 function renderMessages() {
   msgsEl.innerHTML = '';
@@ -1841,24 +1841,54 @@ function renderMessages() {
 }
 
 /**
- * 增量更新：追加新消息时，新消息播慵懒入场动画；
- * 旧消息原地保留，但浏览器会因 scrollTop 变化让它们向上顶。
- * 若一批追加多条，则同样错峰入场。
+ * 增量更新：
+ *   - 移除已删除的消息时，复用 deleteMessage 里的 FLIP 逻辑：
+ *     先记录其他消息位置 → 移除 → 其他消息平滑过渡到新位置
+ *   - 原地更新已存在节点的字段（文件改名）
+ *   - 追加新增消息（错峰入场）
  */
 function applyMessagesUpdate(newList) {
+  // 服务端确认的消息 → 从 pending 里移除
+  for (const m of newList) {
+    pendingLocalIds.delete(m.id);
+  }
+  // 清理过期 pending
+  const nowTs = Date.now();
+  for (const [id, ts] of pendingLocalIds) {
+    if (nowTs - ts > PENDING_GRACE_MS) pendingLocalIds.delete(id);
+  }
+
   const oldIds = new Set(messages.map(m => m.id));
   const newIds = new Set(newList.map(m => m.id));
 
+  // 找出要移除的节点（服务端已无 + 不在 pending 保护中）
+  const toRemove = [];
   for (const oldId of oldIds) {
     if (!newIds.has(oldId)) {
+      if (pendingLocalIds.has(oldId)) continue;
       const el = messageNodes.get(oldId);
-      if (el) {
-        el.remove();
-        messageNodes.delete(oldId);
-      }
+      if (el) toRemove.push({ id: oldId, el });
     }
   }
 
+  // 先记录"保留节点"当前的位置（FLIP 第一步）
+  // 包括所有 .msg（不含要删的），让它们在 DOM 变化后能平滑移动
+  const keepEls = [...msgsEl.querySelectorAll('.msg')]
+    .filter(el => !toRemove.some(r => r.el === el));
+  const prevPositions = new Map();
+  keepEls.forEach(el => {
+    if (el.dataset.id) {
+      prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
+    }
+  });
+
+  // 立即移除要删的节点（FLIP 第二步：DOM 变化）
+  for (const { id, el } of toRemove) {
+    el.remove();
+    messageNodes.delete(id);
+  }
+
+  // 原地更新已存在节点的字段（文件改名）
   const oldMap = new Map(messages.map(m => [m.id, m]));
   for (const m of newList) {
     const old = oldMap.get(m.id);
@@ -1870,6 +1900,7 @@ function applyMessagesUpdate(newList) {
     }
   }
 
+  // 追加新增消息（错峰入场）
   const added = newList.filter(m => !oldIds.has(m.id));
   if (added.length) {
     const lastDayEl = [...msgsEl.querySelectorAll('.day')].pop();
@@ -1894,6 +1925,30 @@ function applyMessagesUpdate(newList) {
       msgsEl.appendChild(el);
       messageNodes.set(m.id, el);
     }
+  }
+
+  // FLIP 第三步：让保留的消息平滑过渡到新位置
+  if (toRemove.length) {
+    keepEls.forEach(el => {
+      const id = el.dataset.id;
+      if (!id) return;
+      const prev = prevPositions.get(id);
+      if (prev == null) return;
+      const now = el.getBoundingClientRect().top;
+      const delta = prev - now;
+      if (Math.abs(delta) < 1) return;
+
+      el.style.animation = 'none';
+      el.style.transition = 'none';
+      el.style.transform = `translateY(${delta}px)`;
+      void el.offsetHeight;
+      el.style.transition = 'transform 520ms cubic-bezier(.32,.72,0,1)';
+      el.style.transform = '';
+      setTimeout(() => {
+        el.style.transition = '';
+        el.style.transform = '';
+      }, 560);
+    });
   }
 
   messages = newList;
@@ -1931,7 +1986,6 @@ async function refreshMessages(scroll) {
     )).json();
     const decoded = await Promise.all((raw || []).map(decodeMsg));
 
-    // 首次加载 / 切换对话
     if (messageNodes.size === 0) {
       messages = decoded;
       renderMessages();
@@ -1941,7 +1995,6 @@ async function refreshMessages(scroll) {
 
     const nearBottom = isNearBottom();
     applyMessagesUpdate(decoded);
-    // 用户原本就在底部附近 → 平滑跟随，旧消息被"顶上去"
     if (scroll && nearBottom) scrollToBottom(false);
   } catch (e) {
     if (e.message !== '401' && !messageNodes.size) {
@@ -2111,10 +2164,6 @@ function isNearBottom() {
   return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120;
 }
 
-/**
- * 平滑滚动到底部（620ms，慵懒缓出）：
- * 新消息到达时，旧消息被平滑地"顶"上去，而不是瞬间跳。
- */
 function scrollToBottom(instant) {
   const target = Math.max(0, msgsEl.scrollHeight - msgsEl.clientHeight);
   if (instant) {
@@ -2131,7 +2180,6 @@ function scrollToBottom(instant) {
 
   const duration = 620;
   const t0 = performance.now();
-  // 慵懒缓出：起始略快，末段极慢，与 msgLazySpring 同族
   const ease = t => 1 - Math.pow(1 - t, 4);
 
   const step = (now) => {
@@ -2224,13 +2272,13 @@ async function deleteMessage(m, wrap) {
   messageNodes.delete(m.id);
   messages = messages.filter(x => x.id !== m.id);
 
+  // 本地删除的 FLIP 动画
   const others = [...msgsEl.querySelectorAll('.msg')].filter(el => el !== wrap);
   const prevPositions = new Map();
   others.forEach(el => prevPositions.set(el.dataset.id, el.getBoundingClientRect().top));
 
   wrap.remove();
 
-  // 其余消息慵懒上移填补空缺
   others.forEach(el => {
     const prev = prevPositions.get(el.dataset.id);
     if (prev == null) return;
@@ -2286,7 +2334,6 @@ async function sendTextOptimistic(text) {
     addDayDivider(now);
   }
 
-  // 自己发送：新消息立即播放入场动画，同时平滑滚动把旧消息顶上去
   const msgEl = renderMessage(msgData);
   msgEl.classList.add('msg-enter');
   msgsEl.appendChild(msgEl);
@@ -2307,6 +2354,7 @@ async function sendTextOptimistic(text) {
     msgEl.dataset.id = res.id;
     messageNodes.delete(tempId);
     messageNodes.set(res.id, msgEl);
+    pendingLocalIds.set(res.id, Date.now());
 
     return { msgData, msgEl, resTs: res.ts };
   } catch (e) {
@@ -2494,7 +2542,6 @@ async function send() {
  * ============================================================ */
 function createUploadCard(file) {
   const wrap = document.createElement('div');
-  // 上传卡片也是"新消息"，同样播放入场动画
   wrap.className = 'msg file msg-enter';
 
   const card = document.createElement('div');
@@ -2616,10 +2663,10 @@ async function uploadOne(item, convId, expSec) {
     };
     messages.push(msgData);
     const newEl = renderMessage(msgData);
-    // 原地替换上传卡片：不重放动画
     newEl.style.animation = 'none';
     wrap.replaceWith(newEl);
     messageNodes.set(msgData.id, newEl);
+    pendingLocalIds.set(msgData.id, Date.now());
   } catch (e) {
     card.classList.remove('uploading');
     card.classList.add('failed');

@@ -9,7 +9,7 @@ const MAX_MESSAGES = 300;
 const MAX_CONV_NAME = 80;
 const MAX_MSG_NAME = 255;
 const GET_CONCURRENCY = 20;
-const PAGE_SIZE = 50;                 // 懒加载每页条数
+const PAGE_SIZE = 10;                 // 懒加载每页条数
 const MAX_TS = 9999999999999;         // 13 位数字上限，用于反向时间戳
 
 const SAFE_INLINE_TYPES = new Set([

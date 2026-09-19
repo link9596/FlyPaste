@@ -5,7 +5,7 @@ const LOGIN_WINDOW_MS = 60_000;
 const LOGIN_MAX_ATTEMPTS = 5;
 
 const JSON_MAX_BYTES = 1_000_000;
-const MAX_MESSAGES = 300;
+const MAX_MESSAGES = 120;
 const MAX_CONV_NAME = 80;
 const MAX_MSG_NAME = 255;
 const GET_CONCURRENCY = 20;   // 文本消息并发

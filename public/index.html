@@ -1376,10 +1376,18 @@ async function unlock() {
       body: JSON.stringify({ password: pw })
     });
     if (res.status === 429) {
-      const data = await res.json().catch(() => ({}));
-      const wait = data.retryAfter || 60;
-      lockErr.textContent = `尝试次数过多，请 ${wait} 秒后再试`;
-      return;
+  const data = await res.json().catch(() => ({}));
+  const wait = data.retryAfter || 60;
+  let waitText;
+  if (wait < 60) {
+    waitText = `${wait} 秒`;
+  } else if (wait < 3600) {
+    waitText = `${Math.ceil(wait / 60)} 分钟`;
+  } else {
+    waitText = `${Math.ceil(wait / 3600)} 小时`;
+  }
+  lockErr.textContent = `尝试次数过多，请 ${waitText}后再试`;
+  return;
     }
     if (!res.ok) throw new Error('bad');
 

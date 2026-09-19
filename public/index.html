@@ -317,7 +317,24 @@ svg{display:block}
 .msg{display:flex;flex-direction:column;align-items:flex-start;
   max-width:100%;}
 
-/* 慵懒弹簧入场：无过冲，位置严格收敛到 0 */
+/* 顶部懒加载指示器 */
+.older-loader{
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  padding:14px 0;
+  color:var(--dim2);
+  font-size:12px;
+  gap:8px;
+  flex-shrink:0;
+}
+.older-loader .spin{
+  width:16px;height:16px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.12);
+  border-top-color:var(--accent);
+  animation:sp .75s linear infinite;
+}
+
 .msg.msg-enter{
   animation:msgLazySpring var(--dur-msg-enter) var(--ease-lazy) both;
   will-change:transform,opacity;
@@ -1055,10 +1072,11 @@ const $ = s => document.querySelector(s);
  * 常量
  * ============================================================ */
 const UPLOAD_CONCURRENCY = 3;
-const ENTER_STAGGER      = 80;    // 相邻两条入场动画的错峰间隔
-const ENTER_STAGGER_MAX  = 1200;  // 错峰总上限
-const ANIMATE_LAST_N     = 12;    // 只对最后 N 条应用入场动画
+const ENTER_STAGGER      = 80;
+const ENTER_STAGGER_MAX  = 1200;
+const ANIMATE_LAST_N     = 12;
 const PENDING_GRACE_MS   = 6000;
+const LAZY_TRIGGER_PX    = 200;   // 距顶部多少像素触发懒加载
 
 /* ============================================================
  * 加密
@@ -1197,7 +1215,7 @@ async function clearStoredKey() {
 let cryptoKey = null;
 let conversations = [];
 let currentConv = null;
-let messages = [];
+let messages = [];                  // 已加载的全部消息（时间升序，最旧在前）
 let pendingFiles = [];
 let pollTimer = null;
 let pollInFlight = false;
@@ -1205,6 +1223,9 @@ let sending = false;
 let activePreview = null;
 let convMenuEl = null;
 let convMenuAnchor = null;
+
+let hasMoreOlder = false;           // 服务端是否还有更早的消息
+let loadingOlder = false;           // 是否正在懒加载中
 
 const decryptCache = new Map();
 const messageNodes = new Map();
@@ -1305,6 +1326,8 @@ function lockScreen(msg = '', clearKey = false) {
   messageNodes.clear();
   pendingLocalIds.clear();
   pendingFiles = [];
+  hasMoreOlder = false;
+  loadingOlder = false;
   renderAttachPreview();
   appEl.classList.add('gone');
   showBootLogin(msg);
@@ -1667,6 +1690,7 @@ function openConvMenu(conv, anchor) {
       if (currentConv?.id === conv.id) {
         currentConv = null;
         messages = [];
+        hasMoreOlder = false;
         msgsEl.innerHTML = '';
         $('#chatTitle').textContent = '对话';
       }
@@ -1775,6 +1799,8 @@ async function openConversation(id) {
   messageNodes.clear();
   pendingLocalIds.clear();
   messages = [];
+  hasMoreOlder = false;
+  loadingOlder = false;
 
   $('#chatTitle').textContent = conv.name || '对话';
   renderConvList();
@@ -1803,8 +1829,8 @@ async function decodeMsg(m) {
 
 /**
  * 首次进入 / 切换对话：全量渲染。
- * 只对最后 ANIMATE_LAST_N 条应用错峰入场动画，
- * 前面的消息直接显示（不参与动画），避免几十条同时"抖动"。
+ * 只对最后 ANIMATE_LAST_N 条应用错峰入场动画。
+ * 顶部保留一个懒加载指示器。
  */
 function renderMessages() {
   msgsEl.innerHTML = '';
@@ -1819,6 +1845,13 @@ function renderMessages() {
       </div>`;
     return;
   }
+
+  // 顶部懒加载指示器
+  const loader = document.createElement('div');
+  loader.className = 'older-loader';
+  loader.hidden = true;
+  loader.innerHTML = '<div class="spin"></div>';
+  msgsEl.appendChild(loader);
 
   const total = messages.length;
   const animateFrom = Math.max(0, total - ANIMATE_LAST_N);
@@ -1847,15 +1880,13 @@ function renderMessages() {
 }
 
 /**
- * 增量更新：
+ * 增量更新（只处理服务端最新窗口）：
+ *   - 只移除"落在服务端窗口内但服务端返回中不存在的"消息
+ *   - 服务端窗口之前的历史消息一律保留
  *   - pendingLocalIds 只按时间清理（6 秒）
- *   - 移除循环里额外检查 _status：sending/sent 的消息绝不移除
- *   - messages 合并时保上被保护的 + 正在发送的消息
- *   - 新增消息错峰入场
- *   - 删除消息复用 FLIP 动画
+ *   - sending/sent 的消息绝不移除
  */
 function applyMessagesUpdate(newList) {
-  // 1. 只按时间清理 pendingLocalIds
   const nowTs = Date.now();
   for (const [id, ts] of pendingLocalIds) {
     if (nowTs - ts > PENDING_GRACE_MS) pendingLocalIds.delete(id);
@@ -1864,7 +1895,14 @@ function applyMessagesUpdate(newList) {
   const oldIds = new Set(messages.map(m => m.id));
   const newIds = new Set(newList.map(m => m.id));
 
-  // 2. 找出要移除的节点（服务端无 + 不在保护 + 不是 sending/sent）
+  // 服务端窗口的时间范围
+  let serverOldest = Infinity;
+  for (const m of newList) {
+    if (m.ts < serverOldest) serverOldest = m.ts;
+  }
+  const hasServerWindow = newList.length > 0;
+
+  // 找出要移除的节点
   const toRemove = [];
   for (const oldId of oldIds) {
     if (newIds.has(oldId)) continue;
@@ -1872,17 +1910,19 @@ function applyMessagesUpdate(newList) {
     // 时间保护
     if (pendingLocalIds.has(oldId)) continue;
 
-    // 本地状态保护：sending/sent 绝不移除
+    // 本地状态保护
     const localMsg = messages.find(x => x.id === oldId);
-    if (localMsg && (localMsg._status === 'sending' || localMsg._status === 'sent')) {
-      continue;
-    }
+    if (!localMsg) continue;
+    if (localMsg._status === 'sending' || localMsg._status === 'sent') continue;
+
+    // 历史保护：服务端窗口之前加载的消息保留
+    if (hasServerWindow && localMsg.ts < serverOldest) continue;
 
     const el = messageNodes.get(oldId);
     if (el) toRemove.push({ id: oldId, el });
   }
 
-  // 3. FLIP 第一步：记录保留节点的当前坐标
+  // FLIP 第一步：记录保留节点的当前坐标
   const keepEls = [...msgsEl.querySelectorAll('.msg')]
     .filter(el => !toRemove.some(r => r.el === el));
   const prevPositions = new Map();
@@ -1892,13 +1932,13 @@ function applyMessagesUpdate(newList) {
     }
   });
 
-  // 4. FLIP 第二步：移除节点
+  // FLIP 第二步：移除节点
   for (const { id, el } of toRemove) {
     el.remove();
     messageNodes.delete(id);
   }
 
-  // 5. 原地更新已存在节点的字段（文件改名）
+  // 原地更新已存在节点的字段（文件改名）
   const oldMap = new Map(messages.map(m => [m.id, m]));
   for (const m of newList) {
     const old = oldMap.get(m.id);
@@ -1910,7 +1950,7 @@ function applyMessagesUpdate(newList) {
     }
   }
 
-  // 6. 追加新增消息
+  // 追加新增消息
   const added = newList.filter(m => !oldIds.has(m.id));
   if (added.length) {
     const lastDayEl = [...msgsEl.querySelectorAll('.day')].pop();
@@ -1937,7 +1977,7 @@ function applyMessagesUpdate(newList) {
     }
   }
 
-  // 7. FLIP 第三步：保留节点平滑过渡
+  // FLIP 第三步：保留节点平滑过渡
   if (toRemove.length) {
     keepEls.forEach(el => {
       const id = el.dataset.id;
@@ -1961,20 +2001,17 @@ function applyMessagesUpdate(newList) {
     });
   }
 
-  // 8. 合并 messages 数组：保上被保护的 + 正在发送/已发送的消息
+  // 合并 messages 数组：服务端最新窗口 + 历史消息 + 保护中的本地消息
   const protectedMsgs = [];
   for (const m of messages) {
     if (newIds.has(m.id)) continue;
 
     // 时间保护
-    if (pendingLocalIds.has(m.id)) {
-      protectedMsgs.push(m);
-      continue;
-    }
+    if (pendingLocalIds.has(m.id)) { protectedMsgs.push(m); continue; }
     // 本地状态保护
-    if (m._status === 'sending' || m._status === 'sent') {
-      protectedMsgs.push(m);
-    }
+    if (m._status === 'sending' || m._status === 'sent') { protectedMsgs.push(m); continue; }
+    // 历史保护：窗口之前的消息保留
+    if (hasServerWindow && m.ts < serverOldest) { protectedMsgs.push(m); continue; }
   }
   const combined = newList.concat(protectedMsgs);
   combined.sort((a, b) => (a.ts || 0) - (b.ts || 0));
@@ -1987,7 +2024,9 @@ function applyMessagesUpdate(newList) {
 
 async function refreshMessages(scroll) {
   if (!currentConv) return;
+  if (loadingOlder) return;   // 懒加载中跳过，避免并发
 
+  // 清理本地失败消息
   const failedMsgs = messages.filter(m => m._status === 'failed');
   if (failedMsgs.length) {
     for (const fm of failedMsgs) {
@@ -2008,18 +2047,22 @@ async function refreshMessages(scroll) {
   if (messages.some(m => m._status === 'sending' || m._status === 'sent')) return;
 
   try {
-    const { messages: raw } = await (await api(
-      'GET', `/api/conversations/${currentConv.id}/messages`
-    )).json();
-    const decoded = await Promise.all((raw || []).map(decodeMsg));
+    const res = await api('GET', `/api/conversations/${currentConv.id}/messages`);
+    const data = await res.json();
+    const raw = data.messages || [];
+    const hasMore = !!data.hasMore;
+    const decoded = await Promise.all(raw.map(decodeMsg));
 
     if (messageNodes.size === 0) {
+      // 首次加载：全量渲染 + 记录 hasMore
       messages = decoded;
+      hasMoreOlder = hasMore;
       renderMessages();
       if (scroll) scrollToBottom(true);
       return;
     }
 
+    // 增量更新
     const nearBottom = isNearBottom();
     applyMessagesUpdate(decoded);
     if (scroll && nearBottom) scrollToBottom(false);
@@ -2029,6 +2072,112 @@ async function refreshMessages(scroll) {
     }
   }
 }
+
+/* ============================================================
+ * 懒加载：向服务端请求更早的消息
+ * ============================================================ */
+async function loadOlderMessages() {
+  if (!currentConv || loadingOlder || !hasMoreOlder) return;
+  if (pollInFlight) return;
+
+  const oldest = messages.find(m => !m.id.startsWith('tmp-'));
+  if (!oldest) return;
+
+  loadingOlder = true;
+  const loader = msgsEl.querySelector('.older-loader');
+  if (loader) loader.hidden = false;
+
+  // 记录插入前的位置，用于恢复
+  const prevScrollHeight = msgsEl.scrollHeight;
+  const prevScrollTop    = msgsEl.scrollTop;
+
+  try {
+    const res = await api('GET',
+      `/api/conversations/${currentConv.id}/messages?before=${encodeURIComponent(oldest.id)}`
+    );
+    const data = await res.json();
+    const olderRaw = data.messages || [];
+    hasMoreOlder = !!data.hasMore;
+
+    if (!olderRaw.length) {
+      if (loader) loader.hidden = true;
+      return;
+    }
+
+    const olderDecoded = await Promise.all(olderRaw.map(decodeMsg));
+
+    // 过滤掉已经存在的
+    const existingIds = new Set(messages.map(m => m.id));
+    const toInsert = olderDecoded.filter(m => !existingIds.has(m.id));
+
+    if (!toInsert.length) {
+      if (loader) loader.hidden = true;
+      return;
+    }
+
+    // 如果第一条旧消息和现有第一个日期分隔线同一天，暂时移除那个分隔线
+    // （构建新节点时会重新生成）
+    const firstDayEl = msgsEl.querySelector('.day');
+    if (firstDayEl && toInsert.length) {
+      const firstOldDay = new Date(toInsert[0].ts).toDateString();
+      if (firstOldDay === firstDayEl.dataset.day) {
+        firstDayEl.remove();
+      }
+    }
+
+    // 构建 DOM fragment（无入场动画）
+    const fragment = document.createDocumentFragment();
+    let lastDay = '';
+    for (const m of toInsert) {
+      const day = new Date(m.ts).toDateString();
+      if (day !== lastDay) {
+        lastDay = day;
+        const d = document.createElement('div');
+        d.className = 'day';
+        d.dataset.day = day;
+        d.textContent = dayLabel(m.ts);
+        fragment.appendChild(d);
+      }
+      const el = renderMessage(m);
+      el.style.animation = 'none';
+      fragment.appendChild(el);
+      messageNodes.set(m.id, el);
+    }
+
+    // 插入到 loader 之后（也就是所有消息之前）
+    const anchor = loader ? loader.nextSibling : msgsEl.firstChild;
+    if (anchor) {
+      msgsEl.insertBefore(fragment, anchor);
+    } else {
+      msgsEl.appendChild(fragment);
+    }
+
+    // 前插到 messages 数组
+    messages = toInsert.concat(messages)
+      .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+
+    // 恢复滚动位置
+    requestAnimationFrame(() => {
+      const newScrollHeight = msgsEl.scrollHeight;
+      msgsEl.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+      if (loader) loader.hidden = true;
+    });
+
+  } catch (e) {
+    if (loader) loader.hidden = true;
+    if (e.message !== '401') showToast('加载更早消息失败', 'error');
+  } finally {
+    loadingOlder = false;
+  }
+}
+
+// 滚动接近顶部时触发懒加载
+msgsEl.addEventListener('scroll', () => {
+  if (!hasMoreOlder || loadingOlder) return;
+  if (msgsEl.scrollTop < LAZY_TRIGGER_PX) {
+    loadOlderMessages();
+  }
+}, { passive: true });
 
 function renderMessage(m) {
   const wrap = document.createElement('div');
@@ -2355,7 +2504,7 @@ async function sendTextOptimistic(text) {
   decryptCache.set(tempId, text);
   messages.push(msgData);
 
-  // 【关键修复】tempId 一诞生就进入保护列表，防止发送过程中被误删
+  // tempId 一诞生就进入保护列表，防止发送过程中被误删
   pendingLocalIds.set(tempId, Date.now());
 
   const empty = msgsEl.querySelector('.empty-state');
@@ -2393,7 +2542,6 @@ async function sendTextOptimistic(text) {
     return { msgData, msgEl, resTs: res.ts };
   } catch (e) {
     msgData._status = 'failed';
-    // 发送失败 → 清除保护，允许后续刷新移除
     pendingLocalIds.delete(tempId);
     msgEl.classList.add('failed');
     const timeEl = msgEl.querySelector('.msg-time');
@@ -2857,6 +3005,7 @@ function debouncedSync() {
     syncDebounceTimer = null;
     if (!currentConv) return;
     if (sending) return;
+    if (loadingOlder) return;
     if (messages.some(m => m._status === 'sending' || m._status === 'sent')) return;
     refreshMessages(true).catch(() => {});
   }, SYNC_DEBOUNCE);
@@ -2886,6 +3035,7 @@ document.addEventListener('visibilitychange', () => {
 async function pollMessages() {
   if (!currentConv || document.hidden || pollInFlight) return;
   if (sending) return;
+  if (loadingOlder) return;
   pollInFlight = true;
   try {
     await refreshMessages(true);

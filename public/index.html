@@ -318,8 +318,7 @@ svg{display:block}
 .msg{display:flex;flex-direction:column;align-items:flex-start;
   max-width:100%;}
 
-/* 顶部懒加载指示器：固定 44px 高度，通过 opacity 切换显隐。
-   高度恒定，所以下方消息位置完全不受影响。 */
+/* 加载中指示器：动态插入，加载完成即移除 */
 .older-loader{
   display:flex;
   justify-content:center;
@@ -329,12 +328,12 @@ svg{display:block}
   gap:8px;
   color:var(--dim2);
   font-size:12px;
-  opacity:0;
-  transition:opacity .35s var(--ease);
   pointer-events:none;
+  animation:loaderFadeIn .22s var(--ease) both;
 }
-.older-loader.active{
-  opacity:1;
+@keyframes loaderFadeIn{
+  from{opacity:0}
+  to{opacity:1}
 }
 .older-loader .spin{
   width:16px;height:16px;border-radius:50%;
@@ -342,13 +341,8 @@ svg{display:block}
   border-top-color:var(--accent);
   animation:sp .75s linear infinite;
 }
-.older-loader .done-text{
-  color:var(--dim2);
-  font-size:11.5px;
-  letter-spacing:.06em;
-}
 
-/* 新消息入场（从下方 28px 上浮） */
+/* 新消息入场（从下方 32px 上浮） */
 .msg.msg-enter{
   animation:msgLazySpring var(--dur-msg-enter) var(--ease-lazy) both;
   will-change:transform,opacity;
@@ -1836,7 +1830,7 @@ async function openConversation(id) {
   messages = [];
   hasMoreOlder = false;
   loadingOlder = false;
-  // 重置顶部回弹设置，回到默认（允许回弹）
+  // 重置顶部回弹
   msgsEl.style.overscrollBehaviorY = '';
 
   $('#chatTitle').textContent = conv.name || '对话';
@@ -1866,8 +1860,7 @@ async function decodeMsg(m) {
 
 /**
  * 首次进入 / 切换对话：全量渲染。
- * 顶部固定一个 44px 的 loader 占位（opacity 0，隐形但占高度），
- * 保证加载时/加载完成后下方消息位置完全不动。
+ * 不再预创建 loader，加载时才动态插入。
  */
 function renderMessages() {
   msgsEl.innerHTML = '';
@@ -1882,12 +1875,6 @@ function renderMessages() {
       </div>`;
     return;
   }
-
-  // 顶部固定高度占位（opacity 0，隐形但占 44px 高度）
-  const loader = document.createElement('div');
-  loader.className = 'older-loader';
-  loader.innerHTML = '<div class="spin"></div>';
-  msgsEl.appendChild(loader);
 
   const total = messages.length;
   const animateFrom = Math.max(0, total - ANIMATE_LAST_N);
@@ -2070,7 +2057,7 @@ async function refreshMessages(scroll) {
       hasMoreOlder = hasMore;
       renderMessages();
       if (scroll) scrollToBottom(true);
-      // 首屏就没有更多历史了 → 立即禁用顶部回弹
+      // 首屏就没有更多历史 → 立即禁用顶部回弹
       if (!hasMoreOlder) {
         msgsEl.style.overscrollBehaviorY = 'none';
       }
@@ -2090,10 +2077,11 @@ async function refreshMessages(scroll) {
 /* ============================================================
  * 懒加载：向服务端请求更早的消息
  * ============================================================
- * 关键点：
- *   1. loader 高度恒定 44px（opacity 控制显隐），不会因加载/完成而改变布局
- *   2. scrollTop 补偿保证下方消息视觉位置完全不动
- *   3. 全部加载完后 overscrollBehaviorY = 'none'，彻底禁用顶部回弹
+ * 关键：
+ *   1. loader 动态创建 → 加载中短暂显示 spinner → 加载完成后立即移除
+ *   2. 移除 loader 后，新消息占据它的位置，同步补偿 scrollTop 保证视觉不跳
+ *   3. 若本次无新消息（说明全部加载完），loader 消失 → 用 FLIP 让下方消息平滑上移补位
+ *   4. hasMoreOlder = false 时立即禁用顶部回弹，彻底阻止惯性触发
  */
 async function loadOlderMessages() {
   if (!currentConv || loadingOlder || !hasMoreOlder) return;
@@ -2104,14 +2092,18 @@ async function loadOlderMessages() {
 
   loadingOlder = true;
 
-  const loader = msgsEl.querySelector('.older-loader');
-  if (loader) {
-    loader.classList.add('active');
-    loader.innerHTML = '<div class="spin"></div>';
-  }
+  // 动态创建 loader 到顶部
+  const loader = document.createElement('div');
+  loader.className = 'older-loader';
+  loader.innerHTML = '<div class="spin"></div>';
 
   const prevScrollHeight = msgsEl.scrollHeight;
-  const prevScrollTop    = msgsEl.scrollTop;
+  const prevScrollTop = msgsEl.scrollTop;
+
+  msgsEl.insertBefore(loader, msgsEl.firstChild);
+
+  // 同步补偿：让下面内容视觉不动
+  msgsEl.scrollTop = prevScrollTop + (msgsEl.scrollHeight - prevScrollHeight);
 
   try {
     const res = await api('GET',
@@ -2121,93 +2113,111 @@ async function loadOlderMessages() {
     const olderRaw = data.messages || [];
     hasMoreOlder = !!data.hasMore;
 
-    if (olderRaw.length) {
-      const olderDecoded = await Promise.all(olderRaw.map(decodeMsg));
-      const existingIds = new Set(messages.map(m => m.id));
-      const toInsert = olderDecoded.filter(m => !existingIds.has(m.id));
+    const olderDecoded = olderRaw.length
+      ? await Promise.all(olderRaw.map(decodeMsg))
+      : [];
+    const existingIds = new Set(messages.map(m => m.id));
+    const toInsert = olderDecoded.filter(m => !existingIds.has(m.id));
 
-      if (toInsert.length) {
-        // 处理第一天分隔线
-        const firstDayEl = msgsEl.querySelector('.day');
-        if (firstDayEl) {
-          const firstOldDay = new Date(toInsert[0].ts).toDateString();
-          if (firstOldDay === firstDayEl.dataset.day) {
-            firstDayEl.remove();
-          }
-        }
-
-        // 构建 fragment（带前插入场动画）
-        const fragment = document.createDocumentFragment();
-        let lastDay = '';
-        let animIdx = 0;
-        for (const m of toInsert) {
-          const day = new Date(m.ts).toDateString();
-          if (day !== lastDay) {
-            lastDay = day;
-            const d = document.createElement('div');
-            d.className = 'day';
-            d.dataset.day = day;
-            d.textContent = dayLabel(m.ts);
-            fragment.appendChild(d);
-          }
-          const el = renderMessage(m);
-          el.classList.add('msg-enter-old');
-          el.style.animationDelay = `${Math.min(animIdx * OLD_ENTER_STAGGER, OLD_ENTER_MAX)}ms`;
-          animIdx++;
-          fragment.appendChild(el);
-          messageNodes.set(m.id, el);
-        }
-
-        // 插入到 loader 之后（loader 位置不动，消息从 loader 下方"长"出来）
-        if (loader) {
-          msgsEl.insertBefore(fragment, loader.nextSibling);
-        } else {
-          msgsEl.insertBefore(fragment, msgsEl.firstChild);
-        }
-
-        // 前插到 messages 数组
-        messages = toInsert.concat(messages)
-          .sort((a, b) => (a.ts || 0) - (b.ts || 0));
-
-        // scrollTop 补偿：保持用户视野中内容不动
-        requestAnimationFrame(() => {
-          const newScrollHeight = msgsEl.scrollHeight;
-          msgsEl.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
-        });
+    // 处理第一天分隔线
+    const firstDayEl = msgsEl.querySelector('.day');
+    if (firstDayEl && toInsert.length) {
+      if (new Date(toInsert[0].ts).toDateString() === firstDayEl.dataset.day) {
+        firstDayEl.remove();
       }
     }
 
-    // 全部加载完 → 禁用顶部回弹，防止惯性再次触发
+    // 记录移除 loader 前的状态
+    const beforeH = msgsEl.scrollHeight;
+    const beforeT = msgsEl.scrollTop;
+
+    if (toInsert.length) {
+      // 【有历史消息】：移除 loader，新消息占据 loader 位置，不补位
+      const fragment = document.createDocumentFragment();
+      let lastDay = '';
+      let animIdx = 0;
+      for (const m of toInsert) {
+        const day = new Date(m.ts).toDateString();
+        if (day !== lastDay) {
+          lastDay = day;
+          const d = document.createElement('div');
+          d.className = 'day';
+          d.dataset.day = day;
+          d.textContent = dayLabel(m.ts);
+          fragment.appendChild(d);
+        }
+        const el = renderMessage(m);
+        el.classList.add('msg-enter-old');
+        el.style.animationDelay = `${Math.min(animIdx * OLD_ENTER_STAGGER, OLD_ENTER_MAX)}ms`;
+        animIdx++;
+        fragment.appendChild(el);
+        messageNodes.set(m.id, el);
+      }
+
+      // 移除 loader（会让下面内容上移 44px）
+      loader.remove();
+
+      // 立即插入新消息到顶部（占据原 loader 的位置）
+      msgsEl.insertBefore(fragment, msgsEl.firstChild);
+
+      // 同步补偿 scrollTop
+      // 效果：旧消息视觉位置完全不动，loader 的位置被新消息顶替
+      msgsEl.scrollTop = beforeT + (msgsEl.scrollHeight - beforeH);
+
+      // 更新 messages 数组
+      messages = toInsert.concat(messages)
+        .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    } else {
+      // 【无历史消息】：loader 移除后，用 FLIP 让下面消息平滑上移补位
+      const keepEls = [...msgsEl.querySelectorAll('.msg')];
+      const prevPositions = new Map();
+      keepEls.forEach(el => {
+        if (el.dataset.id) {
+          prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
+        }
+      });
+
+      loader.remove();
+
+      // FLIP 补偿：让消息从"旧位置"平滑过渡到"新位置"
+      keepEls.forEach(el => {
+        const id = el.dataset.id;
+        if (!id) return;
+        const prev = prevPositions.get(id);
+        if (prev == null) return;
+        const now = el.getBoundingClientRect().top;
+        const delta = prev - now;
+        if (Math.abs(delta) < 1) return;
+
+        el.style.animation = 'none';
+        el.style.transition = 'none';
+        el.style.transform = `translateY(${delta}px)`;
+        void el.offsetHeight;
+        el.style.transition = 'transform 420ms cubic-bezier(.32,.72,0,1)';
+        el.style.transform = '';
+        setTimeout(() => {
+          el.style.transition = '';
+          el.style.transform = '';
+        }, 460);
+      });
+    }
+
+    // 全部加载完 → 禁用顶部回弹，彻底防止惯性触发
     if (!hasMoreOlder) {
       msgsEl.style.overscrollBehaviorY = 'none';
     }
 
   } catch (e) {
+    loader.remove();
     if (e.message !== '401') showToast('加载更早消息失败', 'error');
   } finally {
     loadingOlder = false;
-
-    if (loader) {
-      if (!hasMoreOlder) {
-        // 显示"已无更早消息"1.8 秒后淡出（loader 高度保持）
-        loader.classList.add('active');
-        loader.innerHTML = '<span class="done-text">— 已无更早消息 —</span>';
-        setTimeout(() => {
-          if (loader && loader.isConnected) {
-            loader.classList.remove('active');
-          }
-        }, 1800);
-      } else {
-        // spinner 淡出（loader 高度保持，下方消息不动）
-        loader.classList.remove('active');
-      }
-    }
   }
 }
 
 // 滚动接近顶部时触发懒加载
 msgsEl.addEventListener('scroll', () => {
-  if (!hasMoreOlder) return;   // 全部加载完 → 不再触发
+  if (!hasMoreOlder) return;   // 全部加载完 → 直接返回，不再触发
   if (loadingOlder) return;
   if (msgsEl.scrollTop < LAZY_TRIGGER_PX) {
     loadOlderMessages();

@@ -12,3 +12,11 @@ bucket_name = "clip"
 
 [triggers]
 crons = ["0 */6 * * *"]
+
+[[durable_objects.bindings]]
+name = "SYNC_HUB"
+class_name = "SyncHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncHub"]

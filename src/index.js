@@ -8,6 +8,7 @@ const JSON_MAX_BYTES = 1_000_000;
 const MAX_MESSAGES = 300;
 const MAX_CONV_NAME = 80;
 const MAX_MSG_NAME = 255;
+const GET_CONCURRENCY = 20;   // 文本消息并发
 
 const SAFE_INLINE_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
@@ -383,27 +384,45 @@ async function listMessages(env, convId, tenant) {
 
   const recent = arr.length > MAX_MESSAGES ? arr.slice(-MAX_MESSAGES) : arr;
 
-  const messages = [];
-  for (const o of recent) {
+  // 第一遍：文件消息 meta 直接用，文本消息排入待拉取队列
+  const result = new Array(recent.length);
+  const textTasks = [];
+
+  for (let i = 0; i < recent.length; i++) {
+    const o = recent[i];
     const meta = o.customMetadata || {};
     const id = o.key.slice(prefix.length);
     const ts = parseTs(meta.ts, parseTs(id.split('-')[0], 0));
 
     if (meta.t === 'file') {
-      messages.push({
+      result[i] = {
         id, t: 'file', ts,
         k: meta.k || '',
         n: meta.n || '',
         s: parseTs(meta.s, 0),
         m: meta.m || '',
         e: parseTs(meta.e, 0),
-      });
+      };
     } else {
-      const obj = await env.BUCKET.get(o.key);
-      const v = obj ? await obj.text() : '';
-      messages.push({ id, t: 'text', ts, v });
+      textTasks.push({ idx: i, key: o.key, id, ts });
     }
   }
+
+  // 第二遍：文本消息分批并发 get
+  for (let i = 0; i < textTasks.length; i += GET_CONCURRENCY) {
+    const batch = textTasks.slice(i, i + GET_CONCURRENCY);
+    await Promise.all(batch.map(async ({ idx, key, id, ts }) => {
+      try {
+        const obj = await env.BUCKET.get(key);
+        const v = obj ? await obj.text() : '';
+        result[idx] = { id, t: 'text', ts, v };
+      } catch {
+        result[idx] = { id, t: 'text', ts, v: '' };
+      }
+    }));
+  }
+
+  const messages = result.filter(Boolean);
   return json({ messages });
 }
 

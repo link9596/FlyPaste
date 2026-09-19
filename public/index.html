@@ -20,7 +20,7 @@
   --ease-out:cubic-bezier(.16,1,.3,1);
   --ease-soft:cubic-bezier(.16,1,.3,1);
   --ease-lazy:cubic-bezier(.32,.72,0,1);
-  --dur-msg-enter:820ms;
+  --dur-msg-enter:700ms;
   --dur-shift:520ms;
   --dur-scroll:620ms;
   --bg-rgb:10,10,12;
@@ -317,6 +317,7 @@ svg{display:block}
 .msg{display:flex;flex-direction:column;align-items:flex-start;
   max-width:100%;}
 
+/* 慵懒弹簧入场：无过冲，位置严格收敛到 0 */
 .msg.msg-enter{
   animation:msgLazySpring var(--dur-msg-enter) var(--ease-lazy) both;
   will-change:transform,opacity;
@@ -324,9 +325,9 @@ svg{display:block}
 @keyframes msgLazySpring{
   0%{
     opacity:0;
-    transform:translate3d(0, 28px, 0) scale(.955);
+    transform:translate3d(0, 32px, 0) scale(.94);
   }
-  30%{
+  35%{
     opacity:1;
   }
   100%{
@@ -1055,9 +1056,10 @@ const $ = s => document.querySelector(s);
  * 常量
  * ============================================================ */
 const UPLOAD_CONCURRENCY = 3;
-const ENTER_STAGGER = 45;
-const ENTER_STAGGER_MAX = 520;
-const PENDING_GRACE_MS  = 6000;
+const ENTER_STAGGER      = 80;    // 相邻两条入场动画的错峰间隔
+const ENTER_STAGGER_MAX  = 1200;  // 错峰总上限
+const ANIMATE_LAST_N     = 12;    // 只对最后 N 条应用入场动画
+const PENDING_GRACE_MS   = 6000;
 
 /* ============================================================
  * 加密
@@ -1800,6 +1802,11 @@ async function decodeMsg(m) {
   return { ...m, text };
 }
 
+/**
+ * 首次进入 / 切换对话：全量渲染。
+ * 只对最后 ANIMATE_LAST_N 条应用错峰入场动画，
+ * 前面的消息直接显示（不参与动画），避免几十条同时"抖动"。
+ */
 function renderMessages() {
   msgsEl.innerHTML = '';
   messageNodes.clear();
@@ -1814,9 +1821,12 @@ function renderMessages() {
     return;
   }
 
+  const total = messages.length;
+  const animateFrom = Math.max(0, total - ANIMATE_LAST_N);
+
   let lastDay = '';
-  let idx = 0;
-  for (const m of messages) {
+  for (let i = 0; i < total; i++) {
+    const m = messages[i];
     const day = new Date(m.ts).toDateString();
     if (day !== lastDay) {
       lastDay = day;
@@ -1827,24 +1837,26 @@ function renderMessages() {
       msgsEl.appendChild(d);
     }
     const el = renderMessage(m);
-    el.classList.add('msg-enter');
-    el.style.animationDelay = `${Math.min(idx * ENTER_STAGGER, ENTER_STAGGER_MAX)}ms`;
+    if (i >= animateFrom) {
+      const staggerIdx = i - animateFrom;
+      el.classList.add('msg-enter');
+      el.style.animationDelay = `${Math.min(staggerIdx * ENTER_STAGGER, ENTER_STAGGER_MAX)}ms`;
+    }
     msgsEl.appendChild(el);
     messageNodes.set(m.id, el);
-    idx++;
   }
 }
 
 /**
  * 增量更新：
- *   - 移除已删除的消息时，复用 deleteMessage 里的 FLIP 逻辑
- *   - 原地更新已存在节点的字段（文件改名）
- *   - 追加新增消息（错峰入场）
- *   - pendingLocalIds 只按时间清理（6 秒），不受服务端是否返回影响
- *   - messages 合并时保留被保护但服务端暂未返回的消息
+ *   - pendingLocalIds 只按时间清理（6 秒）
+ *   - 移除循环里额外检查 _status：sending/sent 的消息绝不移除
+ *   - messages 合并时保上被保护的 + 正在发送的消息
+ *   - 新增消息错峰入场
+ *   - 删除消息复用 FLIP 动画
  */
 function applyMessagesUpdate(newList) {
-  // 【改动】只按时间清理，不再因为"服务端返回了"而提前解除
+  // 1. 只按时间清理 pendingLocalIds
   const nowTs = Date.now();
   for (const [id, ts] of pendingLocalIds) {
     if (nowTs - ts > PENDING_GRACE_MS) pendingLocalIds.delete(id);
@@ -1853,17 +1865,25 @@ function applyMessagesUpdate(newList) {
   const oldIds = new Set(messages.map(m => m.id));
   const newIds = new Set(newList.map(m => m.id));
 
-  // 找出要移除的节点（服务端已无 + 不在 pending 保护中）
+  // 2. 找出要移除的节点（服务端无 + 不在保护 + 不是 sending/sent）
   const toRemove = [];
   for (const oldId of oldIds) {
-    if (!newIds.has(oldId)) {
-      if (pendingLocalIds.has(oldId)) continue;
-      const el = messageNodes.get(oldId);
-      if (el) toRemove.push({ id: oldId, el });
+    if (newIds.has(oldId)) continue;
+
+    // 时间保护
+    if (pendingLocalIds.has(oldId)) continue;
+
+    // 本地状态保护：sending/sent 绝不移除
+    const localMsg = messages.find(x => x.id === oldId);
+    if (localMsg && (localMsg._status === 'sending' || localMsg._status === 'sent')) {
+      continue;
     }
+
+    const el = messageNodes.get(oldId);
+    if (el) toRemove.push({ id: oldId, el });
   }
 
-  // FLIP 第一步：记录保留节点的当前坐标
+  // 3. FLIP 第一步：记录保留节点的当前坐标
   const keepEls = [...msgsEl.querySelectorAll('.msg')]
     .filter(el => !toRemove.some(r => r.el === el));
   const prevPositions = new Map();
@@ -1873,13 +1893,13 @@ function applyMessagesUpdate(newList) {
     }
   });
 
-  // FLIP 第二步：移除节点（DOM 重排）
+  // 4. FLIP 第二步：移除节点
   for (const { id, el } of toRemove) {
     el.remove();
     messageNodes.delete(id);
   }
 
-  // 原地更新已存在节点的字段（文件改名）
+  // 5. 原地更新已存在节点的字段（文件改名）
   const oldMap = new Map(messages.map(m => [m.id, m]));
   for (const m of newList) {
     const old = oldMap.get(m.id);
@@ -1891,7 +1911,7 @@ function applyMessagesUpdate(newList) {
     }
   }
 
-  // 追加新增消息（错峰入场）
+  // 6. 追加新增消息
   const added = newList.filter(m => !oldIds.has(m.id));
   if (added.length) {
     const lastDayEl = [...msgsEl.querySelectorAll('.day')].pop();
@@ -1918,7 +1938,7 @@ function applyMessagesUpdate(newList) {
     }
   }
 
-  // FLIP 第三步：保留节点平滑过渡到新位置
+  // 7. FLIP 第三步：保留节点平滑过渡
   if (toRemove.length) {
     keepEls.forEach(el => {
       const id = el.dataset.id;
@@ -1942,12 +1962,19 @@ function applyMessagesUpdate(newList) {
     });
   }
 
-  // 【改动】合并 messages 数组：保留被保护但服务端暂未返回的本地消息
+  // 8. 合并 messages 数组：保上被保护的 + 正在发送/已发送的消息
   const protectedMsgs = [];
-  for (const id of pendingLocalIds.keys()) {
-    if (!newIds.has(id)) {
-      const m = messages.find(x => x.id === id);
-      if (m) protectedMsgs.push(m);
+  for (const m of messages) {
+    if (newIds.has(m.id)) continue;
+
+    // 时间保护
+    if (pendingLocalIds.has(m.id)) {
+      protectedMsgs.push(m);
+      continue;
+    }
+    // 本地状态保护
+    if (m._status === 'sending' || m._status === 'sent') {
+      protectedMsgs.push(m);
     }
   }
   const combined = newList.concat(protectedMsgs);
@@ -2250,6 +2277,7 @@ async function deleteMessage(m, wrap) {
   if (m.id.startsWith('tmp-') || m._status === 'failed') {
     decryptCache.delete(m.id);
     messageNodes.delete(m.id);
+    pendingLocalIds.delete(m.id);
     messages = messages.filter(x => x.id !== m.id);
     wrap.classList.add('deleting');
     setTimeout(() => {
@@ -2271,6 +2299,7 @@ async function deleteMessage(m, wrap) {
 
   decryptCache.delete(m.id);
   messageNodes.delete(m.id);
+  pendingLocalIds.delete(m.id);
   messages = messages.filter(x => x.id !== m.id);
 
   const others = [...msgsEl.querySelectorAll('.msg')].filter(el => el !== wrap);
@@ -2302,7 +2331,7 @@ async function deleteMessage(m, wrap) {
 }
 
 /* ============================================================
- * 文本状态过渡（淡化时长已调整）
+ * 文本状态过渡
  * ============================================================ */
 function fadeSwap(el, className, text) {
   return new Promise(resolve => {
@@ -2326,6 +2355,9 @@ async function sendTextOptimistic(text) {
 
   decryptCache.set(tempId, text);
   messages.push(msgData);
+
+  // 【关键修复】tempId 一诞生就进入保护列表，防止发送过程中被误删
+  pendingLocalIds.set(tempId, Date.now());
 
   const empty = msgsEl.querySelector('.empty-state');
   if (empty) empty.remove();
@@ -2354,11 +2386,16 @@ async function sendTextOptimistic(text) {
     msgEl.dataset.id = res.id;
     messageNodes.delete(tempId);
     messageNodes.set(res.id, msgEl);
+
+    // 保护转移：tempId → res.id（重新计时）
+    pendingLocalIds.delete(tempId);
     pendingLocalIds.set(res.id, Date.now());
 
     return { msgData, msgEl, resTs: res.ts };
   } catch (e) {
     msgData._status = 'failed';
+    // 发送失败 → 清除保护，允许后续刷新移除
+    pendingLocalIds.delete(tempId);
     msgEl.classList.add('failed');
     const timeEl = msgEl.querySelector('.msg-time');
     if (timeEl) await fadeSwap(timeEl, 'status-failed', '发送失败');
@@ -2666,6 +2703,7 @@ async function uploadOne(item, convId, expSec) {
     newEl.style.animation = 'none';
     wrap.replaceWith(newEl);
     messageNodes.set(msgData.id, newEl);
+    // 上传完成的消息也立即进入保护
     pendingLocalIds.set(msgData.id, Date.now());
   } catch (e) {
     card.classList.remove('uploading');

@@ -343,7 +343,6 @@ svg{display:block}
 }
 
 .msg.text .bubble{
-  max-width:min(680px,100%);
   background:rgba(255,255,255,.055);
   border:1px solid var(--line);
   border-radius:18px;padding:10px 15px;
@@ -357,7 +356,7 @@ svg{display:block}
   background:rgba(248,113,113,.04);
 }
 
-.msg.file{width:100%;max-width:min(680px,100%);}
+.msg.file{width:100%;}
 
 .file-card{
   display:flex;align-items:center;gap:12px;
@@ -1655,7 +1654,7 @@ function openConvMenu(conv, anchor) {
 
   menu.querySelector('[data-act="delete"]').onclick = async () => {
     closeConvMenu();
-    if (!await confirmDialog(`删除对话「${conv.name}」？\n该对话下所有文本和文件都会从服务器彻底删除。`)) return;
+    if (!await confirmDialog(`删除对话「${conv.name}」？\n该对话下所有内容将彻底删除，不可恢复。`)) return;
 
     const item = convList.querySelector(`.conv-item[data-id="${conv.id}"]`);
     if (item) item.classList.add('deleting');

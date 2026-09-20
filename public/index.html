@@ -191,14 +191,32 @@ svg{display:block}
 .conv-item{
   position:relative;display:flex;align-items:center;gap:2px;
   padding:6px 6px 6px 12px;border-radius:11px;
-  transition:background .18s, opacity .25s var(--ease);
+  /* iOS 风格删除动画基础 —— filter / transform / opacity 三件套 */
+  filter:blur(0px);
+  transform-origin:center center;
+  will-change:filter,transform,opacity;
+  transition:
+    background .18s,
+    filter var(--dur-delete) cubic-bezier(.22,1,.36,1),
+    transform var(--dur-delete) cubic-bezier(.22,1,.36,1),
+    opacity var(--dur-delete) cubic-bezier(.22,1,.36,1);
 }
 .conv-item:hover{background:rgba(255,255,255,.055)}
 .conv-item.active{background:rgba(99,102,241,.14)}
 .conv-item.active .conv-name{color:var(--accent-hi)}
-.conv-item.deleting{
-  opacity:.35;
+
+/* 等待期：变暗（服务端尚未确认） */
+.conv-item.pending-delete{
+  opacity:.5;
   pointer-events:none;
+}
+/* 播放删除动画：模糊 + 缩小 + 渐隐（定义在 pending-delete 之后，
+   保证同时匹配时 .deleting 覆盖 .pending-delete） */
+.conv-item.deleting{
+  pointer-events:none;
+  filter:blur(8px);
+  transform:scale(.9);
+  opacity:0;
 }
 
 .conv-main{
@@ -320,7 +338,7 @@ svg{display:block}
 .msg{
   display:flex;flex-direction:column;align-items:flex-start;
   max-width:100%;
-  /* iOS 风格删除动画的过渡基础 —— filter / transform / opacity 三件套 */
+  /* iOS 风格删除动画基础 */
   filter:blur(0px);
   transform-origin:center center;
   will-change:filter,transform,opacity;
@@ -328,6 +346,19 @@ svg{display:block}
     filter var(--dur-delete) cubic-bezier(.22,1,.36,1),
     transform var(--dur-delete) cubic-bezier(.22,1,.36,1),
     opacity var(--dur-delete) cubic-bezier(.22,1,.36,1);
+}
+
+/* 等待期：变暗 */
+.msg.pending-delete{
+  opacity:.5;
+  pointer-events:none;
+}
+/* 播放删除动画：模糊 + 缩小 + 渐隐 */
+.msg.deleting{
+  pointer-events:none;
+  filter:blur(12px);
+  transform:scale(.88);
+  opacity:0;
 }
 
 /* 加载中指示器：动态插入，加载完成即移除 */
@@ -390,15 +421,6 @@ svg{display:block}
     opacity:1;
     transform:translate3d(0, 0, 0) scale(1);
   }
-}
-
-/* iOS 风格删除：模糊 + 缩小 + 渐隐。transition 已定义在 .msg 上，
-   .deleting 只负责"目标状态"，让浏览器平滑过渡过去。 */
-.msg.deleting{
-  pointer-events:none;
-  filter:blur(12px);
-  transform:scale(.88);
-  opacity:0;
 }
 
 .msg.text .bubble{
@@ -1132,6 +1154,8 @@ const MULTIPART_MAX_PARTS    = 9990;                // 留余量给后端 10000 
 
 // 删除动画时长（与 CSS 里 --dur-delete 保持一致，多留 20ms 缓冲）
 const DELETE_ANIM_MS = 440;
+// 侧边栏对话删除的 FLIP 时长
+const CONV_FLIP_MS   = 400;
 
 /* ============================================================
  * 加密
@@ -1500,6 +1524,19 @@ function addDayDivider(ts) {
   msgsEl.appendChild(d);
 }
 
+/* 
+ * 关键点：
+ *  1. 先把入场动画（msg-enter / msg-enter-old）清掉。因为 animation-fill-mode: both
+ *     会让动画的最后一帧（opacity:1）永久覆盖 .deleting 的 opacity:0，导致渐隐失效。
+ *  2. pending-delete 和 deleting 两个 class 同时存在时，CSS 里 .deleting 定义在
+ *     .pending-delete 之后，保证目标状态（opacity:0）生效。
+ */
+function playIosDelete(el) {
+  el.style.animation = 'none';
+  el.classList.add('deleting');
+  return new Promise(resolve => setTimeout(resolve, DELETE_ANIM_MS));
+}
+
 /* ============================================================
  * 下拉
  * ============================================================ */
@@ -1634,7 +1671,11 @@ function renderConvList() {
     timeEl.textContent = fmtTime(c.updated || c.created || Date.now());
     main.appendChild(nameEl);
     main.appendChild(timeEl);
-    main.onclick = () => openConversation(c.id);
+    // 修复：排除重命名输入框的点击
+    main.onclick = (e) => {
+      if (e.target.closest && e.target.closest('.conv-rename-input')) return;
+      openConversation(c.id);
+    };
 
     const moreBtn = document.createElement('button');
     moreBtn.className = 'conv-more';
@@ -1743,29 +1784,50 @@ function openConvMenu(conv, anchor) {
     if (!await confirmDialog(`删除对话「${conv.name}」？\n该对话下所有内容将彻底删除，不可恢复。`)) return;
 
     const item = convList.querySelector(`.conv-item[data-id="${conv.id}"]`);
-    if (item) item.classList.add('deleting');
+    if (!item) return;
+
+    // 防重复点击
+    if (item.classList.contains('pending-delete') ||
+        item.classList.contains('deleting')) return;
+
+    // 进入等待期：变暗
+    item.classList.add('pending-delete');
 
     try {
       await api('DELETE', '/api/conversations/' + conv.id);
-      decryptCache.clear();
-      messageNodes.clear();
-      pendingLocalIds.clear();
-      if (currentConv?.id === conv.id) {
-        currentConv = null;
-        messages = [];
-        hasMoreOlder = false;
-        msgsEl.innerHTML = '';
-        $('#chatTitle').textContent = '对话';
-      }
-      await loadConversations();
-      if (!currentConv && conversations.length) {
+    } catch {
+      // 失败：移除等待期状态，消息恢复
+      item.classList.remove('pending-delete');
+      showToast('删除失败', 'error');
+      return;
+    }
+
+    // 服务端确认删除 → 清理缓存
+    decryptCache.clear();
+    messageNodes.clear();
+    pendingLocalIds.clear();
+
+    const wasCurrent = currentConv?.id === conv.id;
+
+    conversations = conversations.filter(c => c.id !== conv.id);
+
+    await playIosDelete(item);
+
+    await finalizeConvDelete(item);
+
+    // 处理当前对话被删的情形
+    if (wasCurrent) {
+      currentConv = null;
+      messages = [];
+      hasMoreOlder = false;
+      msgsEl.innerHTML = '';
+      $('#chatTitle').textContent = '对话';
+
+      if (conversations.length) {
         await openConversation(conversations[0].id);
-      } else if (!conversations.length) {
+      } else {
         await createConversation();
       }
-    } catch {
-      if (item) item.classList.remove('deleting');
-      showToast('删除失败', 'error');
     }
   };
 
@@ -1774,6 +1836,42 @@ function openConvMenu(conv, anchor) {
   setTimeout(() => {
     document.addEventListener('click', onDocClickForMenu, true);
   }, 0);
+}
+
+/* 侧边栏对话项删除：物理移除 + FLIP 补位 */
+async function finalizeConvDelete(item) {
+  const others = [...convList.querySelectorAll('.conv-item')].filter(el => el !== item);
+  const prevPositions = new Map();
+  others.forEach(el => {
+    if (el.dataset.id) {
+      prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
+    }
+  });
+
+  item.remove();
+
+  const anims = [];
+  others.forEach(el => {
+    const prev = prevPositions.get(el.dataset.id);
+    if (prev == null) return;
+    const now = el.getBoundingClientRect().top;
+    const delta = prev - now;
+    if (Math.abs(delta) < 1) return;
+
+    el.style.animation = 'none';
+    el.style.transition = 'none';
+    el.style.transform = `translateY(${delta}px)`;
+    void el.offsetHeight;
+    el.style.transition = `transform ${CONV_FLIP_MS}ms cubic-bezier(.32,.72,0,1)`;
+    el.style.transform = '';
+    anims.push(new Promise(r => setTimeout(() => {
+      el.style.transition = '';
+      el.style.transform = '';
+      r();
+    }, CONV_FLIP_MS + 40)));
+  });
+
+  if (anims.length) await Promise.all(anims);
 }
 
 function startRenameConv(conv) {
@@ -1789,6 +1887,11 @@ function startRenameConv(conv) {
   nameEl.replaceWith(input);
   input.focus();
   input.select();
+
+  //  阻止点击、mousedown 向 main 冒泡（否则会触发 openConversation）
+  ['click', 'mousedown', 'pointerdown', 'touchstart'].forEach(ev => {
+    input.addEventListener(ev, e => e.stopPropagation());
+  });
 
   let done = false;
   const finish = async (save) => {
@@ -2498,45 +2601,39 @@ async function startRename(card, nameEl, m) {
 }
 
 /* ============================================================
- * iOS 风格删除动画
- * ============================================================
- * 关键点：先把入场动画（msg-enter / msg-enter-old）清掉。
- * 因为 animation-fill-mode: both 会让动画的最后一帧（opacity:1）
- * 永久覆盖 .deleting 的 opacity:0，导致渐隐失效。
- */
-function playIosDelete(wrap) {
-  wrap.style.animation = 'none';
-  void wrap.offsetHeight;   // 强制回流，确保 animation:none 生效
-  wrap.classList.add('deleting');
-  return new Promise(resolve => setTimeout(resolve, DELETE_ANIM_MS));
-}
-
+ * 消息删除
+ * ============================================================ */
 async function deleteMessage(m, wrap) {
   if (!await confirmDialog(m.t === 'file' ? '删除这条文件消息？文件也会被删除。' : '删除这条消息？')) return;
 
-  // 临时消息 / 失败消息：无需请求，直接播动画后移除
-  if (m.id.startsWith('tmp-') || m._status === 'failed') {
+  // 防重复点击
+  if (wrap.classList.contains('pending-delete') ||
+      wrap.classList.contains('deleting')) return;
+
+  const isLocal = m.id.startsWith('tmp-') || m._status === 'failed';
+
+  // 立即清除入场动画，释放 opacity 控制权 ——
+  wrap.style.animation = 'none';
+
+  // 本地消息（无服务端）：跳过等待期，直接播动画
+  if (isLocal) {
     decryptCache.delete(m.id);
     messageNodes.delete(m.id);
     pendingLocalIds.delete(m.id);
     messages = messages.filter(x => x.id !== m.id);
     await playIosDelete(wrap);
-    wrap.remove();
-    if (!msgsEl.querySelector('.msg')) renderMessages();
+    await finalizeMessageDelete(wrap);
     return;
   }
 
-  // 立即启动动画（用户点击即时响应），同时后台发请求
-  const animDone = playIosDelete(wrap);
+  // 服务端消息：变暗，等服务端确认
+  wrap.classList.add('pending-delete');
 
   try {
     await api('DELETE', `/api/conversations/${currentConv.id}/messages/${m.id}`);
   } catch {
-    // 请求失败 → 回滚动画，消息恢复显示
-    wrap.style.animation = 'none';
-    wrap.classList.remove('deleting');
-    void wrap.offsetHeight;
-    wrap.style.animation = '';
+    // 失败：移除等待期状态，消息恢复显示
+    wrap.classList.remove('pending-delete');
     showToast('删除失败', 'error');
     return;
   }
@@ -2546,17 +2643,24 @@ async function deleteMessage(m, wrap) {
   pendingLocalIds.delete(m.id);
   messages = messages.filter(x => x.id !== m.id);
 
-  // 等模糊动画播完
-  await animDone;
+  await playIosDelete(wrap);
 
-  // 记录其它消息当前位置（FLIP 起点）
+  await finalizeMessageDelete(wrap);
+}
+
+/* 消息删除：物理移除 + FLIP 补位 */
+async function finalizeMessageDelete(wrap) {
   const others = [...msgsEl.querySelectorAll('.msg')].filter(el => el !== wrap);
   const prevPositions = new Map();
-  others.forEach(el => prevPositions.set(el.dataset.id, el.getBoundingClientRect().top));
+  others.forEach(el => {
+    if (el.dataset.id) {
+      prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
+    }
+  });
 
   wrap.remove();
 
-  // FLIP：下方消息平滑上移补位
+  const anims = [];
   others.forEach(el => {
     const prev = prevPositions.get(el.dataset.id);
     if (prev == null) return;
@@ -2570,11 +2674,14 @@ async function deleteMessage(m, wrap) {
     void el.offsetHeight;
     el.style.transition = 'transform 420ms cubic-bezier(.32,.72,0,1)';
     el.style.transform = '';
-    setTimeout(() => {
+    anims.push(new Promise(r => setTimeout(() => {
       el.style.transition = '';
       el.style.transform = '';
-    }, 460);
+      r();
+    }, 460)));
   });
+
+  if (anims.length) await Promise.all(anims);
 
   if (!msgsEl.querySelector('.msg')) renderMessages();
 }

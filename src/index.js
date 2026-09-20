@@ -11,6 +11,10 @@ const GET_CONCURRENCY = 20;
 const PAGE_SIZE = 20;                 // 懒加载每页条数
 const MAX_TS = 9999999999999;         // 13 位数字上限，用于反向时间戳
 
+const MULTIPART_PART_SIZE = 8 * 1024 * 1024;   // 8 MiB，前端按此切分
+const MULTIPART_MIN_PART = 5 * 1024 * 1024;    // R2 硬性下限
+const MULTIPART_MAX_PARTS = 10000;             // R2 硬性上限
+
 const SAFE_INLINE_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
   'image/webp', 'image/avif', 'image/bmp',
@@ -635,6 +639,182 @@ async function patchMessage(env, ctx, request, convId, msgId, tenant) {
 }
 
 /* ============================================================
+ * 分片上传（R2 Multipart API）
+ * ============================================================
+ * 流程：create → uploadPart × N → complete
+ * 异常：abort（用户取消 / 超时 / 校验失败）
+ *
+ * uploadId 由客户端持有并回传，服务端不落盘状态。
+ * R2 默认 7 天自动中止未完成的 multipart upload，
+ * Dashboard 的 lifecycle rule 再做一层兜底。
+ */
+
+async function createMultipartUpload(env, request, tenant) {
+  let body;
+  try { body = await safeJsonBody(request); }
+  catch (e) { return e instanceof Response ? e : json({ error: 'bad request' }, 400); }
+
+  const rawName = typeof body.n === 'string' ? body.n : '';
+  const name = (rawName.trim() || 'unnamed').slice(0, MAX_MSG_NAME)
+    .replace(/[\r\n\t]/g, ' ');
+  const rawType = typeof body.m === 'string' ? body.m : '';
+  const mime = safeMime(rawType);
+  const size = parseTs(body.s, 0);
+  const expiresSec = parseTs(body.e, 0);
+
+  // 预检：分片数不能超过 R2 上限
+  if (size > 0) {
+    const parts = Math.ceil(size / MULTIPART_PART_SIZE);
+    if (parts > MULTIPART_MAX_PARTS) {
+      return json({
+        error: 'file too large for multipart',
+        maxParts: MULTIPART_MAX_PARTS,
+        suggestedPartSize: Math.ceil(size / MULTIPART_MAX_PARTS),
+      }, 413);
+    }
+  }
+
+  const uuid = crypto.randomUUID();
+  const r2Key = fileKey(tenant, uuid);
+
+  const customMetadata = { n: name, t: mime };
+  if (expiresSec > 0 && expiresSec <= 60 * 60 * 24 * 365) {
+    customMetadata.e = String(Date.now() + expiresSec * 1000);
+  }
+
+  try {
+    const mp = await env.BUCKET.createMultipartUpload(r2Key, {
+      customMetadata,
+      httpMetadata: { contentType: mime },
+    });
+    return json({
+      key: uuid,
+      uploadId: mp.uploadId,
+      partSize: MULTIPART_PART_SIZE,
+    });
+  } catch {
+    return json({ error: 'create multipart failed' }, 500);
+  }
+}
+
+async function uploadMultipartPart(env, request, tenant) {
+  const url = new URL(request.url);
+  const keyParam = url.searchParams.get('key') || '';
+  const uploadId = url.searchParams.get('uploadId') || '';
+  const partNumber = parseInt(url.searchParams.get('partNumber') || '', 10);
+
+  // key 是 uuid（不带 tenant 前缀），服务端拼真实 R2 key
+  if (!isValidFileUuid(keyParam)) return json({ error: 'bad key' }, 400);
+  if (!uploadId || uploadId.length > 200) return json({ error: 'bad uploadId' }, 400);
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > MULTIPART_MAX_PARTS) {
+    return json({ error: 'bad partNumber' }, 400);
+  }
+  if (!request.body) return json({ error: 'no body' }, 400);
+
+  const r2Key = fileKey(tenant, keyParam);
+
+  let mp;
+  try {
+    mp = env.BUCKET.resumeMultipartUpload(r2Key, uploadId);
+  } catch {
+    return json({ error: 'multipart session lost' }, 410);
+  }
+
+  try {
+    const part = await mp.uploadPart(partNumber, request.body);
+    return json({ partNumber: part.partNumber, etag: part.etag });
+  } catch (e) {
+    return json({
+      error: 'upload part failed',
+      detail: String((e && e.message) || e),
+    }, 500);
+  }
+}
+
+async function completeMultipartUpload(env, request, tenant) {
+  let body;
+  try { body = await safeJsonBody(request); }
+  catch (e) { return e instanceof Response ? e : json({ error: 'bad request' }, 400); }
+
+  const keyParam = typeof body.key === 'string' ? body.key : '';
+  const uploadId = typeof body.uploadId === 'string' ? body.uploadId : '';
+  const parts = Array.isArray(body.parts) ? body.parts : [];
+
+  if (!isValidFileUuid(keyParam)) return json({ error: 'bad key' }, 400);
+  if (!uploadId) return json({ error: 'bad uploadId' }, 400);
+  if (!parts.length || parts.length > MULTIPART_MAX_PARTS) {
+    return json({ error: 'bad parts' }, 400);
+  }
+
+  // 校验每个 part 的结构并按 partNumber 升序排列
+  const normalized = parts
+    .map(p => ({
+      partNumber: parseInt(p.partNumber, 10),
+      etag: typeof p.etag === 'string' ? p.etag.replace(/^"|"$/g, '') : '',
+    }))
+    .filter(p => Number.isInteger(p.partNumber) && p.partNumber > 0 && p.etag);
+
+  if (normalized.length !== parts.length) {
+    return json({ error: 'invalid part entry' }, 400);
+  }
+  normalized.sort((a, b) => a.partNumber - b.partNumber);
+
+  const r2Key = fileKey(tenant, keyParam);
+
+  let mp;
+  try {
+    mp = env.BUCKET.resumeMultipartUpload(r2Key, uploadId);
+  } catch {
+    return json({ error: 'multipart session lost' }, 410);
+  }
+
+  try {
+    await mp.complete(normalized);
+  } catch (e) {
+    return json({
+      error: 'complete failed',
+      detail: String((e && e.message) || e),
+    }, 500);
+  }
+
+  // 读回对象，回填最终 name / exp / size 给前端
+  const head = await env.BUCKET.head(r2Key);
+  const meta = (head && head.customMetadata) || {};
+  const name = meta.n || 'unnamed';
+  const exp = parseTs(meta.e, 0);
+
+  return json({
+    key: keyParam,
+    name,
+    exp,
+    size: head ? head.size : 0,
+  });
+}
+
+async function abortMultipartUpload(env, request, tenant) {
+  let body;
+  try { body = await safeJsonBody(request); }
+  catch (e) { return e instanceof Response ? e : json({ error: 'bad request' }, 400); }
+
+  const keyParam = typeof body.key === 'string' ? body.key : '';
+  const uploadId = typeof body.uploadId === 'string' ? body.uploadId : '';
+
+  if (!isValidFileUuid(keyParam)) return json({ error: 'bad key' }, 400);
+  if (!uploadId) return json({ error: 'bad uploadId' }, 400);
+
+  const r2Key = fileKey(tenant, keyParam);
+
+  try {
+    const mp = env.BUCKET.resumeMultipartUpload(r2Key, uploadId);
+    await mp.abort();
+  } catch {
+    // 已经完成 / 已被生命周期清理 / session 不存在 —— 都视为成功
+  }
+
+  return json({ ok: true });
+}
+
+/* ============================================================
  * Durable Object：WebSocket 同步中枢
  * ============================================================ */
 export class SyncHub {
@@ -896,7 +1076,21 @@ export default {
       return json({ error: 'method not allowed' }, 405);
     }
 
-    /* ---------- 文件上传 ---------- */
+    /* ---------- 分片上传 ---------- */
+    if (path === '/api/files/multipart/create' && request.method === 'POST') {
+      return respond(await createMultipartUpload(env, request, tenant));
+    }
+    if (path === '/api/files/multipart/part' && request.method === 'PUT') {
+      return respond(await uploadMultipartPart(env, request, tenant));
+    }
+    if (path === '/api/files/multipart/complete' && request.method === 'POST') {
+      return respond(await completeMultipartUpload(env, request, tenant));
+    }
+    if (path === '/api/files/multipart/abort' && request.method === 'POST') {
+      return respond(await abortMultipartUpload(env, request, tenant));
+    }
+
+    /* ---------- 文件上传（单次） ---------- */
     if (path === '/api/files' && request.method === 'POST') {
       if (!request.body) return json({ error: 'no body' }, 400);
 

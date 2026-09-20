@@ -14,6 +14,7 @@ const MAX_TS = 9999999999999;         // 13 位数字上限，用于反向时间
 const MULTIPART_PART_SIZE = 8 * 1024 * 1024;   // 8 MiB，前端按此切分
 const MULTIPART_MIN_PART = 5 * 1024 * 1024;    // R2 硬性下限
 const MULTIPART_MAX_PARTS = 10000;             // R2 硬性上限
+const UPLOAD_ID_MAX_LEN = 4096;                // R2 uploadId 实测 ~335，放宽到 4096
 
 const SAFE_INLINE_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
@@ -645,6 +646,7 @@ async function patchMessage(env, ctx, request, convId, msgId, tenant) {
  * 异常：abort（用户取消 / 超时 / 校验失败）
  *
  * uploadId 由客户端持有并回传，服务端不落盘状态。
+ * R2 的 uploadId 实测约 335 字符（base64url），上限放宽到 4096。
  * R2 默认 7 天自动中止未完成的 multipart upload，
  * Dashboard 的 lifecycle rule 再做一层兜底。
  */
@@ -692,8 +694,11 @@ async function createMultipartUpload(env, request, tenant) {
       uploadId: mp.uploadId,
       partSize: MULTIPART_PART_SIZE,
     });
-  } catch {
-    return json({ error: 'create multipart failed' }, 500);
+  } catch (e) {
+    return json({
+      error: 'create multipart failed',
+      detail: String((e && e.message) || e),
+    }, 500);
   }
 }
 
@@ -704,10 +709,17 @@ async function uploadMultipartPart(env, request, tenant) {
   const partNumber = parseInt(url.searchParams.get('partNumber') || '', 10);
 
   // key 是 uuid（不带 tenant 前缀），服务端拼真实 R2 key
-  if (!isValidFileUuid(keyParam)) return json({ error: 'bad key' }, 400);
-  if (!uploadId || uploadId.length > 200) return json({ error: 'bad uploadId' }, 400);
+  if (!isValidFileUuid(keyParam)) {
+    return json({ error: 'bad key', got: keyParam.slice(0, 60) }, 400);
+  }
+  if (!uploadId) {
+    return json({ error: 'missing uploadId' }, 400);
+  }
+  if (uploadId.length > UPLOAD_ID_MAX_LEN) {
+    return json({ error: 'uploadId too long', len: uploadId.length }, 400);
+  }
   if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > MULTIPART_MAX_PARTS) {
-    return json({ error: 'bad partNumber' }, 400);
+    return json({ error: 'bad partNumber', got: partNumber }, 400);
   }
   if (!request.body) return json({ error: 'no body' }, 400);
 
@@ -716,8 +728,12 @@ async function uploadMultipartPart(env, request, tenant) {
   let mp;
   try {
     mp = env.BUCKET.resumeMultipartUpload(r2Key, uploadId);
-  } catch {
-    return json({ error: 'multipart session lost' }, 410);
+  } catch (e) {
+    return json({
+      error: 'resume failed',
+      detail: String((e && e.message) || e),
+      r2Key,
+    }, 410);
   }
 
   try {
@@ -727,6 +743,8 @@ async function uploadMultipartPart(env, request, tenant) {
     return json({
       error: 'upload part failed',
       detail: String((e && e.message) || e),
+      r2Key,
+      partNumber,
     }, 500);
   }
 }
@@ -740,10 +758,17 @@ async function completeMultipartUpload(env, request, tenant) {
   const uploadId = typeof body.uploadId === 'string' ? body.uploadId : '';
   const parts = Array.isArray(body.parts) ? body.parts : [];
 
-  if (!isValidFileUuid(keyParam)) return json({ error: 'bad key' }, 400);
-  if (!uploadId) return json({ error: 'bad uploadId' }, 400);
+  if (!isValidFileUuid(keyParam)) {
+    return json({ error: 'bad key', got: keyParam.slice(0, 60) }, 400);
+  }
+  if (!uploadId) {
+    return json({ error: 'missing uploadId' }, 400);
+  }
+  if (uploadId.length > UPLOAD_ID_MAX_LEN) {
+    return json({ error: 'uploadId too long', len: uploadId.length }, 400);
+  }
   if (!parts.length || parts.length > MULTIPART_MAX_PARTS) {
-    return json({ error: 'bad parts' }, 400);
+    return json({ error: 'bad parts', count: parts.length }, 400);
   }
 
   // 校验每个 part 的结构并按 partNumber 升序排列
@@ -755,7 +780,7 @@ async function completeMultipartUpload(env, request, tenant) {
     .filter(p => Number.isInteger(p.partNumber) && p.partNumber > 0 && p.etag);
 
   if (normalized.length !== parts.length) {
-    return json({ error: 'invalid part entry' }, 400);
+    return json({ error: 'invalid part entry', expected: parts.length, got: normalized.length }, 400);
   }
   normalized.sort((a, b) => a.partNumber - b.partNumber);
 
@@ -764,8 +789,12 @@ async function completeMultipartUpload(env, request, tenant) {
   let mp;
   try {
     mp = env.BUCKET.resumeMultipartUpload(r2Key, uploadId);
-  } catch {
-    return json({ error: 'multipart session lost' }, 410);
+  } catch (e) {
+    return json({
+      error: 'resume failed',
+      detail: String((e && e.message) || e),
+      r2Key,
+    }, 410);
   }
 
   try {
@@ -774,6 +803,7 @@ async function completeMultipartUpload(env, request, tenant) {
     return json({
       error: 'complete failed',
       detail: String((e && e.message) || e),
+      r2Key,
     }, 500);
   }
 
@@ -799,8 +829,15 @@ async function abortMultipartUpload(env, request, tenant) {
   const keyParam = typeof body.key === 'string' ? body.key : '';
   const uploadId = typeof body.uploadId === 'string' ? body.uploadId : '';
 
-  if (!isValidFileUuid(keyParam)) return json({ error: 'bad key' }, 400);
-  if (!uploadId) return json({ error: 'bad uploadId' }, 400);
+  if (!isValidFileUuid(keyParam)) {
+    return json({ error: 'bad key', got: keyParam.slice(0, 60) }, 400);
+  }
+  if (!uploadId) {
+    return json({ error: 'missing uploadId' }, 400);
+  }
+  if (uploadId.length > UPLOAD_ID_MAX_LEN) {
+    return json({ error: 'uploadId too long', len: uploadId.length }, 400);
+  }
 
   const r2Key = fileKey(tenant, keyParam);
 

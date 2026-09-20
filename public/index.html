@@ -191,7 +191,6 @@ svg{display:block}
 .conv-item{
   position:relative;display:flex;align-items:center;gap:2px;
   padding:6px 6px 6px 12px;border-radius:11px;
-  /* iOS 风格删除动画基础 —— filter / transform / opacity 三件套 */
   filter:blur(0px);
   transform-origin:center center;
   will-change:filter,transform,opacity;
@@ -215,7 +214,7 @@ svg{display:block}
 .conv-item.deleting{
   pointer-events:none;
   filter:blur(10px);
-  transform:scale(.9);
+  transform:scale(.95);
   opacity:0;
 }
 
@@ -348,15 +347,15 @@ svg{display:block}
 
 /* 等待期：变暗 */
 .msg.pending-delete{
-  opacity:.5;
+  opacity:.85;
   pointer-events:none;
 }
 /* 播放删除动画：模糊 + 缩小 + 渐隐 */
 .msg.deleting{
   pointer-events:none;
   transform-origin:left center;
-  filter:blur(12px);
-  transform:scale(.88);
+  filter:blur(10px);
+  transform:scale(.95);
   opacity:0;
 }
 

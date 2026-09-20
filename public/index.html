@@ -25,6 +25,7 @@
   --dur-msg-enter-old:420ms;
   --dur-shift:520ms;
   --dur-scroll:620ms;
+  --dur-delete:420ms;
   --bg-rgb:10,10,12;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -316,8 +317,18 @@ svg{display:block}
 .day{text-align:center;font-size:11.5px;color:var(--dim2);
   padding:8px 0 2px;user-select:none;}
 
-.msg{display:flex;flex-direction:column;align-items:flex-start;
-  max-width:100%;}
+.msg{
+  display:flex;flex-direction:column;align-items:flex-start;
+  max-width:100%;
+  /* iOS 风格删除动画的过渡基础 —— filter / transform / opacity 三件套 */
+  filter:blur(0px);
+  transform-origin:center center;
+  will-change:filter,transform,opacity;
+  transition:
+    filter var(--dur-delete) cubic-bezier(.22,1,.36,1),
+    transform var(--dur-delete) cubic-bezier(.22,1,.36,1),
+    opacity var(--dur-delete) cubic-bezier(.22,1,.36,1);
+}
 
 /* 加载中指示器：动态插入，加载完成即移除 */
 .older-loader{
@@ -381,10 +392,13 @@ svg{display:block}
   }
 }
 
+/* iOS 风格删除：模糊 + 缩小 + 渐隐。transition 已定义在 .msg 上，
+   .deleting 只负责"目标状态"，让浏览器平滑过渡过去。 */
 .msg.deleting{
-  opacity:.35;
   pointer-events:none;
-  transition:opacity .25s var(--ease);
+  filter:blur(12px);
+  transform:scale(.88);
+  opacity:0;
 }
 
 .msg.text .bubble{
@@ -1051,7 +1065,7 @@ svg{display:block}
             <div class="dd-menu" role="listbox">
               <button type="button" class="dd-option" data-value="3600" role="option">1 小时</button>
               <button type="button" class="dd-option" data-value="86400" role="option">1 天</button>
-              <button type="button" class="dd-option selected" data-value="604800" role="option">7 天</button>
+              <button type="button" class="dd-option" data-value="604800" role="option">7 天</button>
               <button type="button" class="dd-option" data-value="2592000" role="option">30 天</button>
               <button type="button" class="dd-option" data-value="0" role="option">永久</button>
             </div>
@@ -1115,6 +1129,9 @@ const MULTIPART_MIN_PART     = 5 * 1024 * 1024;    // R2 硬性下限
 const MULTIPART_CONCURRENCY  = 4;                   // 并发分片数
 const MULTIPART_RETRY        = 2;                   // 单片失败重试次数
 const MULTIPART_MAX_PARTS    = 9990;                // 留余量给后端 10000 上限
+
+// 删除动画时长（与 CSS 里 --dur-delete 保持一致，多留 20ms 缓冲）
+const DELETE_ANIM_MS = 440;
 
 /* ============================================================
  * 加密
@@ -2480,28 +2497,46 @@ async function startRename(card, nameEl, m) {
   input.addEventListener('blur', () => finish(true));
 }
 
+/* ============================================================
+ * iOS 风格删除动画
+ * ============================================================
+ * 关键点：先把入场动画（msg-enter / msg-enter-old）清掉。
+ * 因为 animation-fill-mode: both 会让动画的最后一帧（opacity:1）
+ * 永久覆盖 .deleting 的 opacity:0，导致渐隐失效。
+ */
+function playIosDelete(wrap) {
+  wrap.style.animation = 'none';
+  void wrap.offsetHeight;   // 强制回流，确保 animation:none 生效
+  wrap.classList.add('deleting');
+  return new Promise(resolve => setTimeout(resolve, DELETE_ANIM_MS));
+}
+
 async function deleteMessage(m, wrap) {
   if (!await confirmDialog(m.t === 'file' ? '删除这条文件消息？文件也会被删除。' : '删除这条消息？')) return;
 
+  // 临时消息 / 失败消息：无需请求，直接播动画后移除
   if (m.id.startsWith('tmp-') || m._status === 'failed') {
     decryptCache.delete(m.id);
     messageNodes.delete(m.id);
     pendingLocalIds.delete(m.id);
     messages = messages.filter(x => x.id !== m.id);
-    wrap.classList.add('deleting');
-    setTimeout(() => {
-      wrap.remove();
-      if (!msgsEl.querySelector('.msg')) renderMessages();
-    }, 260);
+    await playIosDelete(wrap);
+    wrap.remove();
+    if (!msgsEl.querySelector('.msg')) renderMessages();
     return;
   }
 
-  wrap.classList.add('deleting');
+  // 立即启动动画（用户点击即时响应），同时后台发请求
+  const animDone = playIosDelete(wrap);
 
   try {
     await api('DELETE', `/api/conversations/${currentConv.id}/messages/${m.id}`);
   } catch {
+    // 请求失败 → 回滚动画，消息恢复显示
+    wrap.style.animation = 'none';
     wrap.classList.remove('deleting');
+    void wrap.offsetHeight;
+    wrap.style.animation = '';
     showToast('删除失败', 'error');
     return;
   }
@@ -2511,12 +2546,17 @@ async function deleteMessage(m, wrap) {
   pendingLocalIds.delete(m.id);
   messages = messages.filter(x => x.id !== m.id);
 
+  // 等模糊动画播完
+  await animDone;
+
+  // 记录其它消息当前位置（FLIP 起点）
   const others = [...msgsEl.querySelectorAll('.msg')].filter(el => el !== wrap);
   const prevPositions = new Map();
   others.forEach(el => prevPositions.set(el.dataset.id, el.getBoundingClientRect().top));
 
   wrap.remove();
 
+  // FLIP：下方消息平滑上移补位
   others.forEach(el => {
     const prev = prevPositions.get(el.dataset.id);
     if (prev == null) return;
@@ -2528,12 +2568,12 @@ async function deleteMessage(m, wrap) {
     el.style.transition = 'none';
     el.style.transform = `translateY(${delta}px)`;
     void el.offsetHeight;
-    el.style.transition = 'transform 520ms cubic-bezier(.32,.72,0,1)';
+    el.style.transition = 'transform 420ms cubic-bezier(.32,.72,0,1)';
     el.style.transform = '';
     setTimeout(() => {
       el.style.transition = '';
       el.style.transform = '';
-    }, 560);
+    }, 460);
   });
 
   if (!msgsEl.querySelector('.msg')) renderMessages();
@@ -2843,13 +2883,12 @@ function uploadFileDirect(file, expSec, onProgress) {
 
 /* ---------- 分片上传（大文件） ---------- */
 
-// 上传单个分片（含重试）
 function uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx, attempt) {
   attempt = attempt || 0;
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const url = `/api/files/multipart/part?key=${encodeURIComponent(key)}`
-      + `&uploadId=${encodeURIComponent(uploadId)}`
+      + `&uploadId=${uploadId}`
       + `&partNumber=${partNumber}`;
     xhr.open('PUT', url);
     xhr.withCredentials = true;
@@ -2861,7 +2900,6 @@ function uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx
 
     const retryOrFail = (err) => {
       if (attempt < MULTIPART_RETRY) {
-        if (onProgress) onProgress(0);  // 重置该分片进度
         uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx, attempt + 1)
           .then(resolve, reject);
       } else {
@@ -2881,10 +2919,17 @@ function uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx
           if (onProgress) onProgress(blob.size);
           resolve();
         } catch {
-          retryOrFail(new Error('bad response'));
+          retryOrFail(new Error('bad response: ' + xhr.responseText.slice(0, 200)));
         }
       } else {
-        retryOrFail(new Error('HTTP ' + xhr.status));
+        let detail = '';
+        try {
+          const j = JSON.parse(xhr.responseText);
+          detail = j.detail ? ` / ${j.detail}` : (j.error ? ` / ${j.error}` : '');
+        } catch {
+          detail = xhr.responseText ? ` / ${xhr.responseText.slice(0, 120)}` : '';
+        }
+        retryOrFail(new Error(`HTTP ${xhr.status}${detail}`));
       }
     };
     xhr.onerror = () => retryOrFail(new Error('网络错误'));
@@ -2900,7 +2945,6 @@ async function uploadFileMultipart(file, expSec, onProgress) {
 
   if (totalParts > MULTIPART_MAX_PARTS) {
     let bigger = Math.ceil(file.size / MULTIPART_MAX_PARTS);
-    // 对齐到 1 MiB
     bigger = Math.ceil(bigger / (1024 * 1024)) * (1024 * 1024);
     if (bigger < MULTIPART_MIN_PART) bigger = MULTIPART_MIN_PART;
     partSize = bigger;
@@ -2926,20 +2970,26 @@ async function uploadFileMultipart(file, expSec, onProgress) {
   }
   const { key, uploadId } = sess;
 
-  const partProgress = new Array(totalParts).fill(0);
-  const partResults = new Array(totalParts);
-
-  // 节流进度回调（避免每片进度事件都重排）
-  let lastPct = -1;
-  const flushProgress = () => {
+  const partBytes = new Array(totalParts).fill(0);
+  let rafPending = false;
+  let lastEmitPct = -1;
+  const emitProgress = () => {
+    rafPending = false;
     let loaded = 0;
-    for (let i = 0; i < partProgress.length; i++) loaded += partProgress[i];
+    for (let i = 0; i < partBytes.length; i++) loaded += partBytes[i];
     const p = Math.min(loaded / file.size, 1);
-    const pct = Math.round(p * 100);
-    if (pct === lastPct) return;
-    lastPct = pct;
+    const pct = Math.floor(p * 1000);
+    if (pct === lastEmitPct) return;
+    lastEmitPct = pct;
     if (onProgress) onProgress(p);
   };
+  const scheduleEmit = () => {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(emitProgress);
+  };
+
+  const partResults = new Array(totalParts);
 
   // 3. 构造并并发上传分片
   const tasks = [];
@@ -2949,16 +2999,25 @@ async function uploadFileMultipart(file, expSec, onProgress) {
     const end = Math.min(start + partSize, file.size);
     const blob = file.slice(start, end);
     const slot = i;
+
     tasks.push(() => uploadOnePart(
       key, uploadId, partNumber, blob,
-      (loaded) => { partProgress[slot] = loaded; flushProgress(); },
+      (loaded) => {
+        if (loaded > partBytes[slot]) {
+          partBytes[slot] = loaded;
+          scheduleEmit();
+        }
+      },
       partResults, slot
-    ));
+    ).then(() => {
+      partBytes[slot] = blob.size;
+      scheduleEmit();
+    }));
   }
 
   let aborted = false;
   try {
-    await runWithConcurrency(tasks, MULTIPART_CONCURRENCY);
+    const partsRunResults = await runWithConcurrency(tasks, MULTIPART_CONCURRENCY);
 
     // 4. 检查是否全部成功
     let okCount = 0;
@@ -2967,10 +3026,22 @@ async function uploadFileMultipart(file, expSec, onProgress) {
     }
     if (okCount !== totalParts) {
       aborted = true;
-      throw new Error(`部分分片上传失败 (${okCount}/${totalParts})`);
+      let firstErrMsg = '';
+      for (const r of partsRunResults) {
+        if (r && r.error) {
+          firstErrMsg = r.error.message || String(r.error);
+          break;
+        }
+      }
+      throw new Error(
+        `分片上传失败 (${okCount}/${totalParts})` +
+        (firstErrMsg ? `：${firstErrMsg.slice(0, 120)}` : '')
+      );
     }
 
-    // 5. complete
+    // 5. 合并阶段
+    if (onProgress) onProgress(0.99);
+
     const completeRes = await api('POST', '/api/files/multipart/complete', {
       headers: jsonHeaders,
       body: JSON.stringify({ key, uploadId, parts: partResults }),
@@ -2987,7 +3058,6 @@ async function uploadFileMultipart(file, expSec, onProgress) {
     aborted = true;
     throw e;
   } finally {
-    // 主动 abort 清理残留分片（失败时）。成功时 complete 已自动清理。
     if (aborted) {
       try {
         await api('POST', '/api/files/multipart/abort', {
@@ -3042,11 +3112,11 @@ async function uploadOne(item, convId, expSec) {
   try {
     let lastPct = -1;
     const meta = await uploadFile(file, expSec, (p) => {
-      const pct = Math.round(p * 100);
+      const pct = Math.floor(p * 100);
       if (pct === lastPct) return;
       lastPct = pct;
       card.style.setProperty('--progress', pct + '%');
-      metaEl.textContent = '上传中 ' + pct + '%';
+      metaEl.textContent = pct >= 100 ? '处理中…' : `上传中 ${pct}%`;
     });
 
     card.style.setProperty('--progress', '100%');

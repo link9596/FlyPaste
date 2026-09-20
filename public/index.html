@@ -25,7 +25,7 @@
   --dur-msg-enter-old:420ms;
   --dur-shift:520ms;
   --dur-scroll:620ms;
-  --dur-delete:420ms;
+  --dur-delete:620ms;
   --bg-rgb:10,10,12;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -207,7 +207,7 @@ svg{display:block}
 
 /* 等待期：变暗（服务端尚未确认） */
 .conv-item.pending-delete{
-  opacity:.5;
+  opacity:.85;
   pointer-events:none;
 }
 /* 播放删除动画：模糊 + 缩小 + 渐隐（定义在 pending-delete 之后，
@@ -1152,7 +1152,7 @@ const MULTIPART_RETRY        = 2;                   // 单片失败重试次数
 const MULTIPART_MAX_PARTS    = 9990;                // 留余量给后端 10000 上限
 
 // 删除动画时长（与 CSS 里 --dur-delete 保持一致，多留 20ms 缓冲）
-const DELETE_ANIM_MS = 440;
+const DELETE_ANIM_MS = 640;
 // 侧边栏对话删除的 FLIP 时长
 const CONV_FLIP_MS   = 400;
 

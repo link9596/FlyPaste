@@ -267,15 +267,20 @@ const fileKey      = (t, uuid) => `${t}/file/${uuid}`;
  * 同步信号广播
  * ============================================================ */
 async function broadcastSignal(env, tenant, payload) {
+  if (!env.SYNC_HUB) return;
   try {
-    if (!env.SYNC_HUB) return;
     const id = env.SYNC_HUB.idFromName(tenant);
     const stub = env.SYNC_HUB.get(id);
-    await stub.fetch('https://do/broadcast', {
+    const fetchPromise = stub.fetch('https://do/broadcast', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    // 3 秒超时兜底
+    const timeoutPromise = new Promise(resolve =>
+      setTimeout(() => resolve(null), 3000)
+    );
+    await Promise.race([fetchPromise, timeoutPromise]);
   } catch {
     // 静默失败
   }
@@ -472,13 +477,18 @@ async function listMessages(env, convId, tenant, before) {
   return json({ messages, hasMore });
 }
 
-async function createMessage(env, request, convId, tenant) {
-  const metaObj = await env.BUCKET.head(convMetaKey(tenant, convId));
+async function createMessage(env, ctx, request, convId, tenant) {
+  // 并行：校验对话 + 解析 body
+  let metaObj, body;
+  try {
+    [metaObj, body] = await Promise.all([
+      env.BUCKET.head(convMetaKey(tenant, convId)),
+      safeJsonBody(request),
+    ]);
+  } catch (e) {
+    return e instanceof Response ? e : json({ error: 'bad request' }, 400);
+  }
   if (!metaObj) return json({ error: 'conversation not found' }, 404);
-
-  let body;
-  try { body = await safeJsonBody(request); }
-  catch (e) { return e instanceof Response ? e : json({ error: 'bad request' }, 400); }
 
   const now = Date.now();
   const reverseTs = MAX_TS - now;   // 反转时间戳：越小表示越新
@@ -523,36 +533,52 @@ async function createMessage(env, request, convId, tenant) {
     return json({ error: 'bad type' }, 400);
   }
 
-  await updateConvUpdated(env, tenant, convId, now).catch(() => {});
-  await trimMessages(env, tenant, convId).catch(() => {});
-
-  await broadcastSignal(env, tenant, { type: 'sync', convId, ts: now });
+  // 三件事丢后台，不阻塞响应
+  ctx.waitUntil(updateConvUpdated(env, tenant, convId, now).catch(() => {}));
+  ctx.waitUntil(trimMessages(env, tenant, convId).catch(() => {}));
+  ctx.waitUntil(broadcastSignal(env, tenant, { type: 'sync', convId, ts: now }));
 
   return json({ ok: true, id: msgId, ts: now });
 }
 
 async function trimMessages(env, tenant, convId) {
-  const arr = [];
   const prefix = convMsgPrefix(tenant, convId);
-  for await (const o of listAll(env.BUCKET, { prefix })) {
-    arr.push(o);
-  }
-  if (arr.length <= MAX_MESSAGES) return;
 
-  // 反向时间戳下，升序 = 最新在前，所以要删的是后面（最旧的）
-  arr.sort((a, b) => a.key.localeCompare(b.key));
-  const toDelete = arr.slice(MAX_MESSAGES);
+  // 只列 301 条即可判断是否超额
+  const page = await env.BUCKET.list({
+    prefix,
+    limit: MAX_MESSAGES + 1,
+    include: ['customMetadata'],
+  });
+  if (page.objects.length <= MAX_MESSAGES) return;
 
-  for (const o of toDelete) {
-    const meta = o.customMetadata || {};
-    if (meta.t === 'file' && meta.k) {
-      await env.BUCKET.delete(fileKey(tenant, meta.k)).catch(() => {});
+  // list 被截断 → 历史堆积，全量清理（兼容老数据一次性收窄）
+  if (page.truncated) {
+    const arr = [];
+    for await (const o of listAll(env.BUCKET, { prefix })) arr.push(o);
+    arr.sort((a, b) => a.key.localeCompare(b.key));
+    const toDelete = arr.slice(MAX_MESSAGES);
+    for (const o of toDelete) {
+      const meta = o.customMetadata || {};
+      if (meta.t === 'file' && meta.k) {
+        await env.BUCKET.delete(fileKey(tenant, meta.k)).catch(() => {});
+      }
+      await env.BUCKET.delete(o.key).catch(() => {});
     }
-    await env.BUCKET.delete(o.key).catch(() => {});
+    return;
   }
+
+  // 常态：只超 1 条，删最旧的那一条
+  const oldest = page.objects[MAX_MESSAGES];
+  if (!oldest) return;
+  const meta = oldest.customMetadata || {};
+  if (meta.t === 'file' && meta.k) {
+    await env.BUCKET.delete(fileKey(tenant, meta.k)).catch(() => {});
+  }
+  await env.BUCKET.delete(oldest.key).catch(() => {});
 }
 
-async function deleteMessage(env, convId, msgId, tenant) {
+async function deleteMessage(env, ctx, convId, msgId, tenant) {
   const key = convMsgKey(tenant, convId, msgId);
   const obj = await env.BUCKET.head(key);
   if (!obj) return json({ error: 'not found' }, 404);
@@ -562,12 +588,12 @@ async function deleteMessage(env, convId, msgId, tenant) {
   }
   await env.BUCKET.delete(key);
 
-  await broadcastSignal(env, tenant, { type: 'sync', convId, ts: Date.now() });
+  ctx.waitUntil(broadcastSignal(env, tenant, { type: 'sync', convId, ts: Date.now() }));
 
   return json({ ok: true });
 }
 
-async function patchMessage(env, request, convId, msgId, tenant) {
+async function patchMessage(env, ctx, request, convId, msgId, tenant) {
   const key = convMsgKey(tenant, convId, msgId);
   const obj = await env.BUCKET.head(key);
   if (!obj) return json({ error: 'not found' }, 404);
@@ -603,7 +629,7 @@ async function patchMessage(env, request, convId, msgId, tenant) {
     } catch {}
   }
 
-  await broadcastSignal(env, tenant, { type: 'sync', convId, ts: Date.now() });
+  ctx.waitUntil(broadcastSignal(env, tenant, { type: 'sync', convId, ts: Date.now() }));
 
   return json({ ok: true, n: name });
 }
@@ -847,7 +873,9 @@ export default {
         }
         return respond(await listMessages(env, convId, tenant, before));
       }
-      if (request.method === 'POST') return respond(await createMessage(env, request, convId, tenant));
+      if (request.method === 'POST') {
+        return respond(await createMessage(env, ctx, request, convId, tenant));
+      }
       return json({ error: 'method not allowed' }, 405);
     }
 
@@ -859,8 +887,12 @@ export default {
       if (!isValidConvId(convId) || !isValidMsgId(msgId)) {
         return json({ error: 'bad id' }, 400);
       }
-      if (request.method === 'DELETE') return respond(await deleteMessage(env, convId, msgId, tenant));
-      if (request.method === 'PATCH')  return respond(await patchMessage(env, request, convId, msgId, tenant));
+      if (request.method === 'DELETE') {
+        return respond(await deleteMessage(env, ctx, convId, msgId, tenant));
+      }
+      if (request.method === 'PATCH') {
+        return respond(await patchMessage(env, ctx, request, convId, msgId, tenant));
+      }
       return json({ error: 'method not allowed' }, 405);
     }
 

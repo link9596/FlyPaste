@@ -1108,6 +1108,14 @@ const LAZY_TRIGGER_PX    = 200;
 const OLD_ENTER_STAGGER  = 25;
 const OLD_ENTER_MAX      = 300;
 
+// 上传策略
+const DIRECT_UPLOAD_MAX      = 90 * 1024 * 1024;   // ≤ 90 MiB 走单次直传
+const MULTIPART_PART_SIZE    = 8 * 1024 * 1024;    // 8 MiB / 分片
+const MULTIPART_MIN_PART     = 5 * 1024 * 1024;    // R2 硬性下限
+const MULTIPART_CONCURRENCY  = 4;                   // 并发分片数
+const MULTIPART_RETRY        = 2;                   // 单片失败重试次数
+const MULTIPART_MAX_PARTS    = 9990;                // 留余量给后端 10000 上限
+
 /* ============================================================
  * 加密
  * ============================================================ */
@@ -2803,7 +2811,8 @@ function createUploadCard(file) {
   return { wrap, card, metaEl, thumb };
 }
 
-function uploadWithProgress(file, expSec, onProgress) {
+/* ---------- 单次直传（小文件） ---------- */
+function uploadFileDirect(file, expSec, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api/files');
@@ -2830,6 +2839,172 @@ function uploadWithProgress(file, expSec, onProgress) {
     xhr.onabort = () => reject(new Error('已取消'));
     xhr.send(file);
   });
+}
+
+/* ---------- 分片上传（大文件） ---------- */
+
+// 上传单个分片（含重试）
+function uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx, attempt) {
+  attempt = attempt || 0;
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const url = `/api/files/multipart/part?key=${encodeURIComponent(key)}`
+      + `&uploadId=${encodeURIComponent(uploadId)}`
+      + `&partNumber=${partNumber}`;
+    xhr.open('PUT', url);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded);
+    };
+
+    const retryOrFail = (err) => {
+      if (attempt < MULTIPART_RETRY) {
+        if (onProgress) onProgress(0);  // 重置该分片进度
+        uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx, attempt + 1)
+          .then(resolve, reject);
+      } else {
+        reject(err);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        lockScreen('会话已失效，请重新解锁');
+        return reject(new Error('401'));
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          results[idx] = { partNumber: data.partNumber, etag: data.etag };
+          if (onProgress) onProgress(blob.size);
+          resolve();
+        } catch {
+          retryOrFail(new Error('bad response'));
+        }
+      } else {
+        retryOrFail(new Error('HTTP ' + xhr.status));
+      }
+    };
+    xhr.onerror = () => retryOrFail(new Error('网络错误'));
+    xhr.onabort = () => reject(new Error('已取消'));
+    xhr.send(blob);
+  });
+}
+
+async function uploadFileMultipart(file, expSec, onProgress) {
+  // 1. 计算分片大小
+  let partSize = MULTIPART_PART_SIZE;
+  let totalParts = Math.ceil(file.size / partSize);
+
+  if (totalParts > MULTIPART_MAX_PARTS) {
+    let bigger = Math.ceil(file.size / MULTIPART_MAX_PARTS);
+    // 对齐到 1 MiB
+    bigger = Math.ceil(bigger / (1024 * 1024)) * (1024 * 1024);
+    if (bigger < MULTIPART_MIN_PART) bigger = MULTIPART_MIN_PART;
+    partSize = bigger;
+    totalParts = Math.ceil(file.size / partSize);
+  }
+  if (totalParts > 10000) {
+    throw new Error('文件过大（超过约 80 GB），暂不支持');
+  }
+
+  // 2. 创建 multipart session
+  const createRes = await api('POST', '/api/files/multipart/create', {
+    headers: jsonHeaders,
+    body: JSON.stringify({
+      n: file.name,
+      m: file.type || 'application/octet-stream',
+      s: file.size,
+      e: expSec,
+    }),
+  });
+  const sess = await createRes.json();
+  if (!sess || !sess.key || !sess.uploadId) {
+    throw new Error('创建上传会话失败');
+  }
+  const { key, uploadId } = sess;
+
+  const partProgress = new Array(totalParts).fill(0);
+  const partResults = new Array(totalParts);
+
+  // 节流进度回调（避免每片进度事件都重排）
+  let lastPct = -1;
+  const flushProgress = () => {
+    let loaded = 0;
+    for (let i = 0; i < partProgress.length; i++) loaded += partProgress[i];
+    const p = Math.min(loaded / file.size, 1);
+    const pct = Math.round(p * 100);
+    if (pct === lastPct) return;
+    lastPct = pct;
+    if (onProgress) onProgress(p);
+  };
+
+  // 3. 构造并并发上传分片
+  const tasks = [];
+  for (let i = 0; i < totalParts; i++) {
+    const partNumber = i + 1;
+    const start = i * partSize;
+    const end = Math.min(start + partSize, file.size);
+    const blob = file.slice(start, end);
+    const slot = i;
+    tasks.push(() => uploadOnePart(
+      key, uploadId, partNumber, blob,
+      (loaded) => { partProgress[slot] = loaded; flushProgress(); },
+      partResults, slot
+    ));
+  }
+
+  let aborted = false;
+  try {
+    await runWithConcurrency(tasks, MULTIPART_CONCURRENCY);
+
+    // 4. 检查是否全部成功
+    let okCount = 0;
+    for (let i = 0; i < partResults.length; i++) {
+      if (partResults[i]) okCount++;
+    }
+    if (okCount !== totalParts) {
+      aborted = true;
+      throw new Error(`部分分片上传失败 (${okCount}/${totalParts})`);
+    }
+
+    // 5. complete
+    const completeRes = await api('POST', '/api/files/multipart/complete', {
+      headers: jsonHeaders,
+      body: JSON.stringify({ key, uploadId, parts: partResults }),
+    });
+    const meta = await completeRes.json();
+    if (onProgress) onProgress(1);
+    return {
+      key: meta.key || key,
+      name: meta.name || file.name,
+      exp: meta.exp || 0,
+      size: meta.size || file.size,
+    };
+  } catch (e) {
+    aborted = true;
+    throw e;
+  } finally {
+    // 主动 abort 清理残留分片（失败时）。成功时 complete 已自动清理。
+    if (aborted) {
+      try {
+        await api('POST', '/api/files/multipart/abort', {
+          headers: jsonHeaders,
+          body: JSON.stringify({ key, uploadId }),
+        });
+      } catch {}
+    }
+  }
+}
+
+/* ---------- 统一入口：根据文件大小路由 ---------- */
+async function uploadFile(file, expSec, onProgress) {
+  if (file.size > DIRECT_UPLOAD_MAX) {
+    return uploadFileMultipart(file, expSec, onProgress);
+  }
+  return uploadFileDirect(file, expSec, onProgress);
 }
 
 async function uploadAndSend(files) {
@@ -2865,9 +3040,13 @@ async function uploadAndSend(files) {
 async function uploadOne(item, convId, expSec) {
   const { file, wrap, card, metaEl, thumb } = item;
   try {
-    const meta = await uploadWithProgress(file, expSec, (p) => {
-      card.style.setProperty('--progress', (p * 100).toFixed(1) + '%');
-      metaEl.textContent = '上传中 ' + Math.round(p * 100) + '%';
+    let lastPct = -1;
+    const meta = await uploadFile(file, expSec, (p) => {
+      const pct = Math.round(p * 100);
+      if (pct === lastPct) return;
+      lastPct = pct;
+      card.style.setProperty('--progress', pct + '%');
+      metaEl.textContent = '上传中 ' + pct + '%';
     });
 
     card.style.setProperty('--progress', '100%');
@@ -2879,7 +3058,7 @@ async function uploadOne(item, convId, expSec) {
         t: 'file',
         k: meta.key,
         n: meta.name || file.name,
-        s: file.size,
+        s: meta.size || file.size,
         m: file.type || 'application/octet-stream',
         e: meta.exp || 0
       })
@@ -2891,7 +3070,7 @@ async function uploadOne(item, convId, expSec) {
       ts: result.ts,
       k: meta.key,
       n: meta.name || file.name,
-      s: file.size,
+      s: meta.size || file.size,
       m: file.type || 'application/octet-stream',
       e: meta.exp || 0
     };

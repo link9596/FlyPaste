@@ -214,8 +214,8 @@ svg{display:block}
    保证同时匹配时 .deleting 覆盖 .pending-delete） */
 .conv-item.deleting{
   pointer-events:none;
-  filter:blur(15px);
-  transform:scale(.99);
+  filter:blur(10px);
+  transform:scale(.9);
   opacity:0;
 }
 
@@ -338,9 +338,7 @@ svg{display:block}
 .msg{
   display:flex;flex-direction:column;align-items:flex-start;
   max-width:100%;
-  /* iOS 风格删除动画基础 */
   filter:blur(0px);
-  transform-origin:center center;
   will-change:filter,transform,opacity;
   transition:
     filter var(--dur-delete) cubic-bezier(.22,1,.36,1),
@@ -356,6 +354,7 @@ svg{display:block}
 /* 播放删除动画：模糊 + 缩小 + 渐隐 */
 .msg.deleting{
   pointer-events:none;
+  transform-origin:left center;
   filter:blur(12px);
   transform:scale(.88);
   opacity:0;

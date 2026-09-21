@@ -25,7 +25,8 @@
   --dur-msg-enter-old:420ms;
   --dur-shift:520ms;
   --dur-scroll:620ms;
-  --dur-delete:620ms;
+  --dur-delete:620ms;       /* 消息删除动画时长 */
+  --dur-delete-conv:400ms;  /* 对话删除动画时长（更短，补位更早） */
   --bg-rgb:10,10,12;
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -196,9 +197,9 @@ svg{display:block}
   will-change:filter,transform,opacity;
   transition:
     background .18s,
-    filter var(--dur-delete) cubic-bezier(.22,1,.36,1),
-    transform var(--dur-delete) cubic-bezier(.22,1,.36,1),
-    opacity var(--dur-delete) cubic-bezier(.22,1,.36,1);
+    filter var(--dur-delete-conv) cubic-bezier(.22,1,.36,1),
+    transform var(--dur-delete-conv) cubic-bezier(.22,1,.36,1),
+    opacity var(--dur-delete-conv) cubic-bezier(.22,1,.36,1);
 }
 .conv-item:hover{background:rgba(255,255,255,.055)}
 .conv-item.active{background:rgba(99,102,241,.14)}
@@ -359,23 +360,14 @@ svg{display:block}
   opacity:0;
 }
 
-/* 加载中指示器：动态插入，加载完成即移除 */
+/* 加载中指示器 */
 .older-loader{
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  height:44px;
-  flex-shrink:0;
-  gap:8px;
-  color:var(--dim2);
-  font-size:12px;
-  pointer-events:none;
+  display:flex;justify-content:center;align-items:center;
+  height:44px;flex-shrink:0;gap:8px;
+  color:var(--dim2);font-size:12px;pointer-events:none;
   animation:loaderFadeIn .22s var(--ease) both;
 }
-@keyframes loaderFadeIn{
-  from{opacity:0}
-  to{opacity:1}
-}
+@keyframes loaderFadeIn{from{opacity:0}to{opacity:1}}
 .older-loader .spin{
   width:16px;height:16px;border-radius:50%;
   border:2px solid rgba(255,255,255,.12);
@@ -383,42 +375,26 @@ svg{display:block}
   animation:sp .75s linear infinite;
 }
 
-/* 新消息入场（从下方 32px 上浮） */
+/* 新消息入场 */
 .msg.msg-enter{
   animation:msgLazySpring var(--dur-msg-enter) var(--ease-lazy) both;
   will-change:transform,opacity;
 }
 @keyframes msgLazySpring{
-  0%{
-    opacity:0;
-    transform:translate3d(0, 32px, 0) scale(.94);
-  }
-  35%{
-    opacity:1;
-  }
-  100%{
-    opacity:1;
-    transform:translate3d(0, 0, 0) scale(1);
-  }
+  0%{opacity:0;transform:translate3d(0, 32px, 0) scale(.94);}
+  35%{opacity:1;}
+  100%{opacity:1;transform:translate3d(0, 0, 0) scale(1);}
 }
 
-/* 旧消息入场（前插历史：从上方 16px 下沉 + 淡化 + 缩放） */
+/* 旧消息入场 */
 .msg.msg-enter-old{
   animation:msgLazySpringOld var(--dur-msg-enter-old) var(--ease-lazy) both;
   will-change:transform,opacity;
 }
 @keyframes msgLazySpringOld{
-  0%{
-    opacity:0;
-    transform:translate3d(0, -16px, 0) scale(.96);
-  }
-  40%{
-    opacity:1;
-  }
-  100%{
-    opacity:1;
-    transform:translate3d(0, 0, 0) scale(1);
-  }
+  0%{opacity:0;transform:translate3d(0, -16px, 0) scale(.96);}
+  40%{opacity:1;}
+  100%{opacity:1;transform:translate3d(0, 0, 0) scale(1);}
 }
 
 .msg.text .bubble{
@@ -517,7 +493,6 @@ svg{display:block}
   font-weight:600;
   letter-spacing:.02em;
 }
-
 .msg-time.status-failed{
   color:var(--danger);
   font-weight:600;
@@ -531,9 +506,7 @@ svg{display:block}
 .msg-act{
   width:24px;height:24px;padding:0;
   display:grid;place-items:center;
-  border-radius:6px;
-  background:transparent;
-  border:0;
+  border-radius:6px;background:transparent;border:0;
   color:var(--dim);
   transition:color .18s,transform .14s;
 }
@@ -564,17 +537,13 @@ svg{display:block}
 }
 .empty-state .big{font-size:15px;color:var(--dim);margin-bottom:6px}
 .empty-state .empty-logo{
-  width:56px;height:56px;
-  margin:0 auto 18px;
+  width:56px;height:56px;margin:0 auto 18px;
   display:grid;place-items:center;
   color:var(--accent-hi);
   filter:drop-shadow(0 0 22px rgba(99,102,241,.35));
   animation:float 3.6s ease-in-out infinite;
 }
-.empty-state .empty-logo svg{
-  width:100%;height:100%;
-  display:block;
-}
+.empty-state .empty-logo svg{width:100%;height:100%;display:block;}
 .empty-state .spin{
   width:22px;height:22px;
   border:2.5px solid rgba(255,255,255,.12);
@@ -603,17 +572,11 @@ svg{display:block}
    输入区
    ============================================================ */
 .composer{
-  position:relative;
-  flex-shrink:0;
+  position:relative;flex-shrink:0;
   padding:6px max(16px,calc(50% - 400px)) max(12px,env(safe-area-inset-bottom));
 }
-
 .composer::before{
-  content:'';
-  position:absolute;
-  left:0;right:0;
-  top:-26px;
-  height:30px;
+  content:'';position:absolute;left:0;right:0;top:-26px;height:30px;
   background:linear-gradient(
     to bottom,
     rgba(var(--bg-rgb),0) 0%,
@@ -621,13 +584,11 @@ svg{display:block}
     rgba(var(--bg-rgb),.9) 78%,
     var(--bg) 100%
   );
-  pointer-events:none;
-  z-index:1;
+  pointer-events:none;z-index:1;
 }
 
 .composer-box{
-  position:relative;
-  z-index:2;
+  position:relative;z-index:2;
   display:flex;flex-direction:column;gap:6px;
   padding:10px 12px;
   background:rgba(255,255,255,.05);
@@ -649,16 +610,11 @@ svg{display:block}
 }
 
 .attach-preview{
-  display:flex;
-  flex-wrap:nowrap;
-  gap:6px;
-  overflow-x:auto;
-  overflow-y:hidden;
-  padding:2px 2px 8px;
-  margin-bottom:2px;
+  display:flex;flex-wrap:nowrap;gap:6px;
+  overflow-x:auto;overflow-y:hidden;
+  padding:2px 2px 8px;margin-bottom:2px;
   border-bottom:1px dashed var(--line);
-  scrollbar-width:none;
-  -ms-overflow-style:none;
+  scrollbar-width:none;-ms-overflow-style:none;
   -webkit-overflow-scrolling:touch;
 }
 .attach-preview::-webkit-scrollbar{display:none}
@@ -668,9 +624,7 @@ svg{display:block}
   background:rgba(255,255,255,.06);
   border:1px solid var(--line);
   border-radius:10px;
-  flex:0 0 auto;
-  min-width:150px;
-  max-width:220px;
+  flex:0 0 auto;min-width:150px;max-width:220px;
   animation:chipIn .24s var(--ease) both;
 }
 @keyframes chipIn{from{opacity:0;transform:translateY(-4px) scale(.96)}}
@@ -698,13 +652,9 @@ svg{display:block}
 .chip-x svg{width:12px;height:12px}
 
 #input{
-  width:100%;
-  background:transparent;border:0;outline:none;
-  font-size:15px;line-height:1.55;
-  resize:none;
-  padding:4px 2px;
-  min-height:26px;
-  max-height:180px;
+  width:100%;background:transparent;border:0;outline:none;
+  font-size:15px;line-height:1.55;resize:none;
+  padding:4px 2px;min-height:26px;max-height:180px;
   overflow-y:auto;
 }
 #input::placeholder{color:var(--dim2)}
@@ -713,13 +663,9 @@ svg{display:block}
 
 .composer-bottom{
   display:flex;align-items:center;justify-content:space-between;
-  gap:12px;padding-top:2px;
-  padding-left:2px;
+  gap:12px;padding-top:2px;padding-left:2px;
 }
-.composer-actions{
-  display:flex;align-items:center;
-  gap:14px;
-}
+.composer-actions{display:flex;align-items:center;gap:14px;}
 
 .icon-btn{
   width:30px;height:30px;border-radius:50%;flex-shrink:0;
@@ -738,112 +684,62 @@ svg{display:block}
 
 /* ---------- 发送按钮 ---------- */
 .icon-btn.send{
-  position:relative;
-  border:0;
-  background:none;
-  color:#fff;
-  overflow:visible;
+  position:relative;border:0;background:none;color:#fff;overflow:visible;
   transition:transform .16s var(--ease),filter .2s var(--ease),opacity .25s var(--ease);
 }
-
 .icon-btn.send::before{
   --send-hole:0%;
-  content:'';
-  position:absolute;
-  inset:0;
-  border-radius:50%;
+  content:'';position:absolute;inset:0;border-radius:50%;
   background:radial-gradient(circle at 50% 50%,
-    transparent 0,
-    transparent var(--send-hole),
-    var(--accent) var(--send-hole),
-    var(--accent) 100%);
+    transparent 0,transparent var(--send-hole),
+    var(--accent) var(--send-hole),var(--accent) 100%);
   transform:scale(1);
   transition:
     --send-hole .4s var(--ease),
     transform .4s var(--ease),
     opacity .3s var(--ease),
     filter .2s var(--ease);
-  pointer-events:none;
-  z-index:0;
+  pointer-events:none;z-index:0;
 }
-
 .icon-btn.send::after{
-  content:'';
-  position:absolute;
-  inset:0;
-  border-radius:50%;
+  content:'';position:absolute;inset:0;border-radius:50%;
   background:conic-gradient(
     from -90deg,
-    var(--accent) 0deg,
-    var(--accent) 100deg,
-    transparent 100deg,
-    transparent 360deg
+    var(--accent) 0deg,var(--accent) 100deg,
+    transparent 100deg,transparent 360deg
   );
   -webkit-mask:radial-gradient(circle at 50% 50%,
-    transparent 0,
-    transparent calc(50% - 2.5px),
-    #000 calc(50% - 2.5px),
-    #000 50%,
-    transparent 50%,
-    transparent 100%);
+    transparent 0,transparent calc(50% - 2.5px),
+    #000 calc(50% - 2.5px),#000 50%,
+    transparent 50%,transparent 100%);
   mask:radial-gradient(circle at 50% 50%,
-    transparent 0,
-    transparent calc(50% - 2.5px),
-    #000 calc(50% - 2.5px),
-    #000 50%,
-    transparent 50%,
-    transparent 100%);
-  opacity:0;
-  transition:opacity .3s var(--ease);
-  pointer-events:none;
-  z-index:1;
+    transparent 0,transparent calc(50% - 2.5px),
+    #000 calc(50% - 2.5px),#000 50%,
+    transparent 50%,transparent 100%);
+  opacity:0;transition:opacity .3s var(--ease);
+  pointer-events:none;z-index:1;
 }
-
 .icon-btn.send .send-ico{
-  position:relative;
-  z-index:2;
+  position:relative;z-index:2;
   transition:opacity .22s var(--ease),transform .3s var(--ease);
 }
-
-.icon-btn.send:not(.sending):not(.spinning):hover::before{
-  filter:brightness(1.1);
-}
-.icon-btn.send:not(.sending):not(.spinning):active{
-  transform:scale(.92);
-}
+.icon-btn.send:not(.sending):not(.spinning):hover::before{filter:brightness(1.1);}
+.icon-btn.send:not(.sending):not(.spinning):active{transform:scale(.92);}
 .icon-btn.send:disabled:not(.sending):not(.spinning){
-  opacity:.3;
-  cursor:default;
-  filter:none;
-  transform:none;
+  opacity:.3;cursor:default;filter:none;transform:none;
 }
-.icon-btn.send.sending,
-.icon-btn.send.spinning{
-  opacity:1;
-  cursor:default;
-  transform:none;
-  filter:none;
+.icon-btn.send.sending,.icon-btn.send.spinning{
+  opacity:1;cursor:default;transform:none;filter:none;
 }
-.icon-btn.send.sending .send-ico,
-.icon-btn.send.spinning .send-ico{
-  opacity:0;
-  transform:scale(.5);
+.icon-btn.send.sending .send-ico,.icon-btn.send.spinning .send-ico{
+  opacity:0;transform:scale(.5);
 }
-.icon-btn.send.sending::before{
-  --send-hole:74%;
-  transform:scale(.88);
-}
-.icon-btn.send.spinning::before{
-  opacity:0;
-}
+.icon-btn.send.sending::before{--send-hole:74%;transform:scale(.88);}
+.icon-btn.send.spinning::before{opacity:0;}
 .icon-btn.send.spinning::after{
-  opacity:1;
-  animation:spin .72s linear infinite;
+  opacity:1;animation:spin .72s linear infinite;
 }
-@keyframes spin{
-  from{ rotate:0deg; }
-  to  { rotate:360deg; }
-}
+@keyframes spin{from{rotate:0deg}to{rotate:360deg}}
 
 /* ---------- 下拉 ---------- */
 .dd{position:relative;user-select:none;}
@@ -864,8 +760,7 @@ svg{display:block}
   box-shadow:0 0 0 3px rgba(99,102,241,.12);}
 .dd-prefix{color:var(--dim2);font-size:11.5px;white-space:nowrap;}
 .dd-label{white-space:nowrap;color:var(--fg);}
-.dd-chevron{width:12px;height:12px;flex-shrink:0;
-  transition:transform .3s var(--ease);}
+.dd-chevron{width:12px;height:12px;flex-shrink:0;transition:transform .3s var(--ease);}
 .dd.open .dd-chevron{transform:rotate(180deg);color:var(--accent-hi)}
 .dd-menu{
   position:absolute;bottom:calc(100% + 6px);left:0;
@@ -937,19 +832,13 @@ svg{display:block}
   font-weight:500;border:1px solid var(--line);}
 .btn.ghost:hover{background:rgba(255,255,255,.1)}
 
-/* ---------- Toast 提示 ---------- */
+/* ---------- Toast ---------- */
 .toast-container{
-  position:fixed;
-  left:50%;
+  position:fixed;left:50%;
   bottom:calc(110px + env(safe-area-inset-bottom));
-  transform:translateX(-50%);
-  z-index:400;
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  gap:8px;
-  pointer-events:none;
-  max-width:calc(100vw - 40px);
+  transform:translateX(-50%);z-index:400;
+  display:flex;flex-direction:column;align-items:center;gap:8px;
+  pointer-events:none;max-width:calc(100vw - 40px);
 }
 .toast{
   padding:10px 18px;
@@ -957,16 +846,11 @@ svg{display:block}
   backdrop-filter:blur(16px) saturate(180%);
   -webkit-backdrop-filter:blur(16px) saturate(180%);
   border:1px solid var(--line-hi);
-  border-radius:12px;
-  color:var(--fg);
-  font-size:13.5px;
-  line-height:1.4;
+  border-radius:12px;color:var(--fg);
+  font-size:13.5px;line-height:1.4;
   box-shadow:0 14px 40px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.2);
   animation:toastIn .32s var(--ease) both;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  max-width:100%;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;
 }
 .toast.error{
   border-color:rgba(248,113,113,.4);
@@ -978,17 +862,12 @@ svg{display:block}
   from{opacity:0;transform:translateY(12px) scale(.94)}
   to{opacity:1;transform:translateY(0) scale(1)}
 }
-.toast.out{
-  animation:toastOut .32s var(--ease) forwards;
-}
-@keyframes toastOut{
-  to{opacity:0;transform:translateY(-8px) scale(.94)}
-}
+.toast.out{animation:toastOut .32s var(--ease) forwards;}
+@keyframes toastOut{to{opacity:0;transform:translateY(-8px) scale(.94)}}
 
 /* ---------- 响应式 ---------- */
 @media (max-width:760px){
   #menuBtn{display:grid}
-
   .sidebar{
     position:fixed;z-index:80;top:0;left:0;bottom:0;width:270px;
     transform:translateZ(0) translateX(-101%);
@@ -1070,11 +949,8 @@ svg{display:block}
 
     <div class="composer">
       <div class="composer-box" id="composerBox">
-
         <div class="attach-preview" id="attachPreview" hidden></div>
-
         <textarea id="input" placeholder="输入消息…" rows="1" spellcheck="false"></textarea>
-
         <div class="composer-bottom">
           <div class="dd" id="expiryDD" data-value="604800">
             <button type="button" class="dd-trigger" aria-haspopup="listbox" aria-expanded="false">
@@ -1085,12 +961,11 @@ svg{display:block}
             <div class="dd-menu" role="listbox">
               <button type="button" class="dd-option" data-value="3600" role="option">1 小时</button>
               <button type="button" class="dd-option" data-value="86400" role="option">1 天</button>
-              <button type="button" class="dd-option" data-value="604800" role="option">7 天</button>
+              <button type="button" class="dd-option selected" data-value="604800" role="option">7 天</button>
               <button type="button" class="dd-option" data-value="2592000" role="option">30 天</button>
               <button type="button" class="dd-option" data-value="0" role="option">永久</button>
             </div>
           </div>
-
           <div class="composer-actions">
             <button class="icon-btn add" id="attachBtn" title="添加文件">
               <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
@@ -1101,7 +976,6 @@ svg{display:block}
           </div>
         </div>
       </div>
-
       <input type="file" id="fileInput" multiple hidden>
     </div>
   </main>
@@ -1142,18 +1016,16 @@ const LAZY_TRIGGER_PX    = 200;
 const OLD_ENTER_STAGGER  = 25;
 const OLD_ENTER_MAX      = 300;
 
-// 上传策略
-const DIRECT_UPLOAD_MAX      = 90 * 1024 * 1024;   // ≤ 90 MiB 走单次直传
-const MULTIPART_PART_SIZE    = 8 * 1024 * 1024;    // 8 MiB / 分片
-const MULTIPART_MIN_PART     = 5 * 1024 * 1024;    // R2 硬性下限
-const MULTIPART_CONCURRENCY  = 4;                   // 并发分片数
-const MULTIPART_RETRY        = 2;                   // 单片失败重试次数
-const MULTIPART_MAX_PARTS    = 9990;                // 留余量给后端 10000 上限
+const DIRECT_UPLOAD_MAX      = 90 * 1024 * 1024;
+const MULTIPART_PART_SIZE    = 8 * 1024 * 1024;
+const MULTIPART_MIN_PART     = 5 * 1024 * 1024;
+const MULTIPART_CONCURRENCY  = 4;
+const MULTIPART_RETRY        = 2;
+const MULTIPART_MAX_PARTS    = 9990;
 
-// 删除动画时长（与 CSS 里 --dur-delete 保持一致，多留 20ms 缓冲）
-const DELETE_ANIM_MS = 640;
-// 侧边栏对话删除的 FLIP 时长
-const CONV_FLIP_MS   = 400;
+const DELETE_ANIM_MS      = 640;   // 消息删除动画（配合 --dur-delete:620ms）
+const CONV_DELETE_ANIM_MS = 420;   // 对话删除动画（配合 --dur-delete-conv:400ms）
+const CONV_FLIP_MS        = 400;   // 侧边栏对话 FLIP
 
 /* ============================================================
  * 加密
@@ -1168,15 +1040,11 @@ async function deriveKey(password) {
   );
   return crypto.subtle.deriveKey(
     { name:'PBKDF2', salt:SALT, iterations:310000, hash:'SHA-256' },
-    base,
-    { name:'AES-GCM', length:256 },
-    false,
-    ['encrypt','decrypt']
+    base, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']
   );
 }
 function u8ToB64(u8) {
-  let bin = '';
-  const CH = 0x8000;
+  let bin = ''; const CH = 0x8000;
   for (let i = 0; i < u8.length; i += CH) {
     bin += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
   }
@@ -1202,9 +1070,7 @@ async function decryptText(key, b64) {
   try {
     const raw = b64ToU8(b64);
     const pt = await crypto.subtle.decrypt(
-      { name:'AES-GCM', iv: raw.subarray(0,12) },
-      key,
-      raw.subarray(12)
+      { name:'AES-GCM', iv: raw.subarray(0,12) }, key, raw.subarray(12)
     );
     return td.decode(pt);
   } catch { return ''; }
@@ -1213,9 +1079,9 @@ async function decryptText(key, b64) {
 /* ============================================================
  * 密钥持久化
  * ============================================================ */
-const KEY_DB    = 'flypaste-keys';
+const KEY_DB = 'flypaste-keys';
 const KEY_STORE = 'keys';
-const KEY_ID    = 'primary-key';
+const KEY_ID = 'primary-key';
 
 function openKeyDB() {
   return new Promise((resolve, reject) => {
@@ -1224,16 +1090,13 @@ function openKeyDB() {
     catch (e) { reject(e); return; }
     req.onupgradeneeded = () => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(KEY_STORE)) {
-        db.createObjectStore(KEY_STORE);
-      }
+      if (!db.objectStoreNames.contains(KEY_STORE)) db.createObjectStore(KEY_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
     req.onblocked = () => reject(new Error('blocked'));
   });
 }
-
 async function storeKey(key) {
   try {
     const db = await openKeyDB();
@@ -1251,7 +1114,6 @@ async function storeKey(key) {
     return false;
   }
 }
-
 async function loadKey() {
   try {
     const db = await openKeyDB();
@@ -1262,16 +1124,10 @@ async function loadKey() {
       req.onerror = () => reject(req.error);
     });
     db.close();
-    if (key && key.type === 'secret'
-        && key.algorithm && key.algorithm.name === 'AES-GCM') {
-      return key;
-    }
+    if (key && key.type === 'secret' && key.algorithm && key.algorithm.name === 'AES-GCM') return key;
     return null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
-
 async function clearStoredKey() {
   try {
     const db = await openKeyDB();
@@ -1321,7 +1177,6 @@ function showToast(text, type) {
   el.className = 'toast' + (type === 'error' ? ' error' : '');
   el.textContent = text;
   toastContainer.appendChild(el);
-
   setTimeout(() => {
     el.classList.add('out');
     setTimeout(() => el.remove(), 340);
@@ -1334,19 +1189,14 @@ function showToast(text, type) {
 async function runWithConcurrency(tasks, limit) {
   const results = new Array(tasks.length);
   let next = 0;
-
   const worker = async () => {
     while (true) {
       const i = next++;
       if (i >= tasks.length) return;
-      try {
-        results[i] = await tasks[i]();
-      } catch (e) {
-        results[i] = { error: e };
-      }
+      try { results[i] = await tasks[i](); }
+      catch (e) { results[i] = { error: e }; }
     }
   };
-
   const n = Math.min(limit, tasks.length);
   if (n <= 0) return results;
   await Promise.all(Array.from({ length: n }, worker));
@@ -1358,9 +1208,7 @@ async function runWithConcurrency(tasks, limit) {
  * ============================================================ */
 async function api(method, path, opts = {}) {
   const res = await fetch(path, {
-    method,
-    credentials: 'same-origin',
-    ...opts,
+    method, credentials: 'same-origin', ...opts,
     headers: { ...(opts.headers || {}) }
   });
   if (res.status === 401) {
@@ -1379,11 +1227,11 @@ const jsonHeaders = { 'Content-Type': 'application/json' };
 /* ============================================================
  * 锁屏
  * ============================================================ */
-const bootEl    = $('#boot');
-const appEl     = $('#app');
-const pwInput   = $('#pw');
+const bootEl = $('#boot');
+const appEl = $('#app');
+const pwInput = $('#pw');
 const unlockBtn = $('#unlockBtn');
-const lockErr   = $('#lockErr');
+const lockErr = $('#lockErr');
 
 function showApp(){ appEl.classList.remove('gone'); }
 function hideBoot(){ bootEl.classList.add('gone'); }
@@ -1393,7 +1241,6 @@ function showBootLogin(msg){
   lockErr.textContent = msg || '';
   pwInput.value = '';
 }
-
 function lockScreen(msg = '', clearKey = false) {
   cryptoKey = null;
   if (clearKey) clearStoredKey().catch(() => {});
@@ -1418,33 +1265,24 @@ async function unlock() {
   unlockBtn.textContent = '正在登录…';
   try {
     const res = await fetch('/api/login', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: jsonHeaders,
-      body: JSON.stringify({ password: pw })
+      method: 'POST', credentials: 'same-origin',
+      headers: jsonHeaders, body: JSON.stringify({ password: pw })
     });
     if (res.status === 429) {
-  const data = await res.json().catch(() => ({}));
-  const wait = data.retryAfter || 60;
-  let waitText;
-  if (wait < 60) {
-    waitText = `${wait} 秒`;
-  } else if (wait < 3600) {
-    waitText = `${Math.ceil(wait / 60)} 分钟`;
-  } else {
-    waitText = `${Math.ceil(wait / 3600)} 小时`;
-  }
-  lockErr.textContent = `尝试次数过多，请 ${waitText}后再试`;
-  return;
+      const data = await res.json().catch(() => ({}));
+      const wait = data.retryAfter || 60;
+      let waitText;
+      if (wait < 60) waitText = `${wait} 秒`;
+      else if (wait < 3600) waitText = `${Math.ceil(wait / 60)} 分钟`;
+      else waitText = `${Math.ceil(wait / 3600)} 小时`;
+      lockErr.textContent = `尝试次数过多，请 ${waitText}后再试`;
+      return;
     }
     if (!res.ok) throw new Error('bad');
-
     cryptoKey = await deriveKey(pw);
     await storeKey(cryptoKey);
-
     pwInput.value = '';
     decryptCache.clear();
-
     showApp();
     hideBoot();
     await boot();
@@ -1522,17 +1360,21 @@ function addDayDivider(ts) {
   msgsEl.appendChild(d);
 }
 
-/* 
+/* ============================================================
+ * iOS 风格删除动画（消息 + 对话共用）
+ * ============================================================
  * 关键点：
- *  1. 先把入场动画（msg-enter / msg-enter-old）清掉。因为 animation-fill-mode: both
- *     会让动画的最后一帧（opacity:1）永久覆盖 .deleting 的 opacity:0，导致渐隐失效。
- *  2. pending-delete 和 deleting 两个 class 同时存在时，CSS 里 .deleting 定义在
+ *  1. 先把入场动画清掉。因为 animation-fill-mode: both 会让动画的
+ *     最后一帧（opacity:1）永久覆盖 .deleting 的 opacity:0。
+ *  2. pending-delete 和 deleting 同时存在时，CSS 里 .deleting 定义在
  *     .pending-delete 之后，保证目标状态（opacity:0）生效。
+ *  3. duration 参数允许消息和对话使用不同时长。
  */
-function playIosDelete(el) {
+function playIosDelete(el, duration) {
+  const dur = duration || DELETE_ANIM_MS;
   el.style.animation = 'none';
   el.classList.add('deleting');
-  return new Promise(resolve => setTimeout(resolve, DELETE_ANIM_MS));
+  return new Promise(resolve => setTimeout(resolve, dur));
 }
 
 /* ============================================================
@@ -1542,8 +1384,16 @@ function initDropdown(el) {
   const trigger = el.querySelector('.dd-trigger');
   const label   = el.querySelector('.dd-label');
   const options = Array.from(el.querySelectorAll('.dd-option'));
-  let focusIdx = options.findIndex(o => o.classList.contains('selected'));
-  if (focusIdx < 0) focusIdx = 0;
+
+  // ★ 显式同步：以 dataset.value 为准，设置 selected class 和 label 文本
+  const currentValue = el.dataset.value;
+  let currentIdx = options.findIndex(o => o.dataset.value === currentValue);
+  if (currentIdx < 0) currentIdx = options.findIndex(o => o.classList.contains('selected'));
+  if (currentIdx < 0) currentIdx = 0;
+  options.forEach((o, i) => o.classList.toggle('selected', i === currentIdx));
+  if (label) label.textContent = options[currentIdx].textContent.trim();
+
+  let focusIdx = currentIdx;
 
   function open() {
     document.querySelectorAll('.dd.open').forEach(d => d !== el && closeDropdown(d));
@@ -1669,7 +1519,6 @@ function renderConvList() {
     timeEl.textContent = fmtTime(c.updated || c.created || Date.now());
     main.appendChild(nameEl);
     main.appendChild(timeEl);
-    // 修复：排除重命名输入框的点击
     main.onclick = (e) => {
       if (e.target.closest && e.target.closest('.conv-rename-input')) return;
       openConversation(c.id);
@@ -1681,11 +1530,8 @@ function renderConvList() {
     moreBtn.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>';
     moreBtn.onclick = (e) => {
       e.stopPropagation();
-      if (convMenuEl && convMenuAnchor === moreBtn) {
-        closeConvMenu();
-      } else {
-        openConvMenu(c, moreBtn);
-      }
+      if (convMenuEl && convMenuAnchor === moreBtn) closeConvMenu();
+      else openConvMenu(c, moreBtn);
     };
 
     el.appendChild(main);
@@ -1695,10 +1541,7 @@ function renderConvList() {
 }
 
 function closeConvMenu() {
-  if (convMenuEl) {
-    convMenuEl.remove();
-    convMenuEl = null;
-  }
+  if (convMenuEl) { convMenuEl.remove(); convMenuEl = null; }
   convMenuAnchor = null;
   document.removeEventListener('click', onDocClickForMenu, true);
 }
@@ -1711,26 +1554,19 @@ function onDocClickForMenu(e) {
 
 function openConvMenu(conv, anchor) {
   closeConvMenu();
-
   const menu = document.createElement('div');
   menu.className = 'conv-menu';
   menu.innerHTML = `
     <button data-act="pin">
-      <svg viewBox="0 0 24 24">
-        <path d="M16 3l5 5-3.5 1.5L14 13l-.5 5-1 1-4-4-4 3 2-4-1.5-3L4 6l5-1 3-3z"/>
-      </svg>
+      <svg viewBox="0 0 24 24"><path d="M16 3l5 5-3.5 1.5L14 13l-.5 5-1 1-4-4-4 3 2-4-1.5-3L4 6l5-1 3-3z"/></svg>
       <span>${conv.pinned ? '取消置顶' : '置顶'}</span>
     </button>
     <button data-act="rename">
-      <svg viewBox="0 0 24 24">
-        <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>
-      </svg>
+      <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
       <span>重命名</span>
     </button>
     <button data-act="delete" class="danger">
-      <svg viewBox="0 0 24 24">
-        <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>
-      </svg>
+      <svg viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>
       <span>删除</span>
     </button>
   `;
@@ -1741,10 +1577,7 @@ function openConvMenu(conv, anchor) {
   const menuW = menu.offsetWidth;
 
   let top = r.bottom + 6;
-  if (top + menuH > innerHeight - 8) {
-    top = Math.max(8, r.top - menuH - 6);
-  }
-
+  if (top + menuH > innerHeight - 8) top = Math.max(8, r.top - menuH - 6);
   let left = r.right - menuW;
   if (left < 8) left = 8;
 
@@ -1783,10 +1616,7 @@ function openConvMenu(conv, anchor) {
 
     const item = convList.querySelector(`.conv-item[data-id="${conv.id}"]`);
     if (!item) return;
-
-    // 防重复点击
-    if (item.classList.contains('pending-delete') ||
-        item.classList.contains('deleting')) return;
+    if (item.classList.contains('pending-delete') || item.classList.contains('deleting')) return;
 
     // 进入等待期：变暗
     item.classList.add('pending-delete');
@@ -1794,38 +1624,30 @@ function openConvMenu(conv, anchor) {
     try {
       await api('DELETE', '/api/conversations/' + conv.id);
     } catch {
-      // 失败：移除等待期状态，消息恢复
       item.classList.remove('pending-delete');
       showToast('删除失败', 'error');
       return;
     }
 
-    // 服务端确认删除 → 清理缓存
     decryptCache.clear();
     messageNodes.clear();
     pendingLocalIds.clear();
 
     const wasCurrent = currentConv?.id === conv.id;
-
     conversations = conversations.filter(c => c.id !== conv.id);
 
-    await playIosDelete(item);
-
+    // ★ 对话删除用更短的动画时长（CONV_DELETE_ANIM_MS），补位更早
+    await playIosDelete(item, CONV_DELETE_ANIM_MS);
     await finalizeConvDelete(item);
 
-    // 处理当前对话被删的情形
     if (wasCurrent) {
       currentConv = null;
       messages = [];
       hasMoreOlder = false;
       msgsEl.innerHTML = '';
       $('#chatTitle').textContent = '对话';
-
-      if (conversations.length) {
-        await openConversation(conversations[0].id);
-      } else {
-        await createConversation();
-      }
+      if (conversations.length) await openConversation(conversations[0].id);
+      else await createConversation();
     }
   };
 
@@ -1836,14 +1658,11 @@ function openConvMenu(conv, anchor) {
   }, 0);
 }
 
-/* 侧边栏对话项删除：物理移除 + FLIP 补位 */
 async function finalizeConvDelete(item) {
   const others = [...convList.querySelectorAll('.conv-item')].filter(el => el !== item);
   const prevPositions = new Map();
   others.forEach(el => {
-    if (el.dataset.id) {
-      prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
-    }
+    if (el.dataset.id) prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
   });
 
   item.remove();
@@ -1886,7 +1705,6 @@ function startRenameConv(conv) {
   input.focus();
   input.select();
 
-  //  阻止点击、mousedown 向 main 冒泡（否则会触发 openConversation）
   ['click', 'mousedown', 'pointerdown', 'touchstart'].forEach(ev => {
     input.addEventListener(ev, e => e.stopPropagation());
   });
@@ -1896,11 +1714,7 @@ function startRenameConv(conv) {
     if (done) return;
     done = true;
     const v = input.value.trim();
-
-    if (!save || !v || v === oldName) {
-      input.replaceWith(nameEl);
-      return;
-    }
+    if (!save || !v || v === oldName) { input.replaceWith(nameEl); return; }
 
     conv.name = v;
     nameEl.textContent = v;
@@ -1908,11 +1722,9 @@ function startRenameConv(conv) {
     if (currentConv?.id === conv.id) $('#chatTitle').textContent = v;
 
     nameEl.style.opacity = '.6';
-
     try {
       await api('PATCH', '/api/conversations/' + conv.id, {
-        headers: jsonHeaders,
-        body: JSON.stringify({ name: v })
+        headers: jsonHeaders, body: JSON.stringify({ name: v })
       });
       nameEl.style.opacity = '';
     } catch {
@@ -1932,23 +1744,18 @@ function startRenameConv(conv) {
 
 async function createConversation(name) {
   closeSidebarMobile();
-
   $('#chatTitle').textContent = '新对话';
   msgsEl.innerHTML = `
     <div class="empty-state">
       <div class="spin"></div>
       <div>正在创建对话…</div>
     </div>`;
-
   try {
     const res = await (await api('POST', '/api/conversations', {
-      headers: jsonHeaders,
-      body: JSON.stringify({ name: name || '新对话' })
+      headers: jsonHeaders, body: JSON.stringify({ name: name || '新对话' })
     })).json();
     await loadConversations();
-    if (res.conversation) {
-      await openConversation(res.conversation.id);
-    }
+    if (res.conversation) await openConversation(res.conversation.id);
   } catch {
     msgsEl.innerHTML = '<div class="empty-state" style="color:var(--danger)">创建失败</div>';
   }
@@ -1965,13 +1772,10 @@ async function openConversation(id) {
   messages = [];
   hasMoreOlder = false;
   loadingOlder = false;
-  // 重置顶部回弹
   msgsEl.style.overscrollBehaviorY = '';
-
   $('#chatTitle').textContent = conv.name || '对话';
   renderConvList();
   closeSidebarMobile();
-
   msgsEl.innerHTML = '<div class="empty-state"><div class="spin"></div></div>';
   await refreshMessages(true);
   ensureWS();
@@ -1993,13 +1797,9 @@ async function decodeMsg(m) {
   return { ...m, text };
 }
 
-/**
- * 首次进入 / 切换对话：全量渲染。
- */
 function renderMessages() {
   msgsEl.innerHTML = '';
   messageNodes.clear();
-
   if (!messages.length) {
     msgsEl.innerHTML = `
       <div class="empty-state">
@@ -2009,10 +1809,8 @@ function renderMessages() {
       </div>`;
     return;
   }
-
   const total = messages.length;
   const animateFrom = Math.max(0, total - ANIMATE_LAST_N);
-
   let lastDay = '';
   for (let i = 0; i < total; i++) {
     const m = messages[i];
@@ -2036,7 +1834,8 @@ function renderMessages() {
   }
 }
 
-function applyMessagesUpdate(newList) {
+/* ★ 改为 async —— 处理 toRemove 时播放 iOS 删除动画 */
+async function applyMessagesUpdate(newList) {
   const nowTs = Date.now();
   for (const [id, ts] of pendingLocalIds) {
     if (nowTs - ts > PENDING_GRACE_MS) pendingLocalIds.delete(id);
@@ -2046,40 +1845,30 @@ function applyMessagesUpdate(newList) {
   const newIds = new Set(newList.map(m => m.id));
 
   let serverOldest = Infinity;
-  for (const m of newList) {
-    if (m.ts < serverOldest) serverOldest = m.ts;
-  }
+  for (const m of newList) if (m.ts < serverOldest) serverOldest = m.ts;
   const hasServerWindow = newList.length > 0;
 
   const toRemove = [];
   for (const oldId of oldIds) {
     if (newIds.has(oldId)) continue;
     if (pendingLocalIds.has(oldId)) continue;
-
     const localMsg = messages.find(x => x.id === oldId);
     if (!localMsg) continue;
     if (localMsg._status === 'sending' || localMsg._status === 'sent') continue;
-
     if (hasServerWindow && localMsg.ts < serverOldest) continue;
-
     const el = messageNodes.get(oldId);
     if (el) toRemove.push({ id: oldId, el });
   }
 
+  // 记录 keepEls 位置（FLIP 起点）
   const keepEls = [...msgsEl.querySelectorAll('.msg')]
     .filter(el => !toRemove.some(r => r.el === el));
   const prevPositions = new Map();
   keepEls.forEach(el => {
-    if (el.dataset.id) {
-      prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
-    }
+    if (el.dataset.id) prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
   });
 
-  for (const { id, el } of toRemove) {
-    el.remove();
-    messageNodes.delete(id);
-  }
-
+  // 处理重命名
   const oldMap = new Map(messages.map(m => [m.id, m]));
   for (const m of newList) {
     const old = oldMap.get(m.id);
@@ -2091,11 +1880,11 @@ function applyMessagesUpdate(newList) {
     }
   }
 
+  // 处理新增消息（同步添加 + 入场动画）
   const added = newList.filter(m => !oldIds.has(m.id));
   if (added.length) {
     const lastDayEl = [...msgsEl.querySelectorAll('.day')].pop();
     let lastDay = lastDayEl ? lastDayEl.dataset.day : '';
-
     for (let i = 0; i < added.length; i++) {
       const m = added[i];
       const day = new Date(m.ts).toDateString();
@@ -2117,7 +1906,28 @@ function applyMessagesUpdate(newList) {
     }
   }
 
+  // 先更新 messages 数组
+  const protectedMsgs = [];
+  for (const m of messages) {
+    if (newIds.has(m.id)) continue;
+    if (pendingLocalIds.has(m.id)) { protectedMsgs.push(m); continue; }
+    if (m._status === 'sending' || m._status === 'sent') { protectedMsgs.push(m); continue; }
+    if (hasServerWindow && m.ts < serverOldest) { protectedMsgs.push(m); continue; }
+  }
+  const combined = newList.concat(protectedMsgs);
+  combined.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  messages = combined;
+
+  // ★ 处理删除：播放 iOS 删除动画（异步），完成后再 FLIP 补位
   if (toRemove.length) {
+    const removals = toRemove.map(({ id, el }) => {
+      messageNodes.delete(id);
+      return playIosDelete(el).then(() => el.remove());
+    });
+
+    await Promise.all(removals);
+
+    // FLIP 补位
     keepEls.forEach(el => {
       const id = el.dataset.id;
       if (!id) return;
@@ -2140,18 +1950,7 @@ function applyMessagesUpdate(newList) {
     });
   }
 
-  const protectedMsgs = [];
-  for (const m of messages) {
-    if (newIds.has(m.id)) continue;
-    if (pendingLocalIds.has(m.id)) { protectedMsgs.push(m); continue; }
-    if (m._status === 'sending' || m._status === 'sent') { protectedMsgs.push(m); continue; }
-    if (hasServerWindow && m.ts < serverOldest) { protectedMsgs.push(m); continue; }
-  }
-  const combined = newList.concat(protectedMsgs);
-  combined.sort((a, b) => (a.ts || 0) - (b.ts || 0));
-  messages = combined;
-
-  if (!messages.length && !msgsEl.querySelector('.empty-state')) {
+  if (!messages.length && !msgsEl.querySelector('.empty-state') && !msgsEl.querySelector('.msg')) {
     renderMessages();
   }
 }
@@ -2160,7 +1959,6 @@ async function refreshMessages(scroll) {
   if (!currentConv) return;
   if (loadingOlder) return;
 
-  // 【关键】捕获发起时的对话 ID，响应回来时校验
   const convId = currentConv.id;
 
   const failedMsgs = messages.filter(m => m._status === 'failed');
@@ -2189,7 +1987,6 @@ async function refreshMessages(scroll) {
     const hasMore = !!data.hasMore;
     const decoded = await Promise.all(raw.map(decodeMsg));
 
-    // 【关键】响应回来时校验：对话已切换 → 丢弃本次响应
     if (!currentConv || currentConv.id !== convId) return;
 
     if (messageNodes.size === 0) {
@@ -2197,17 +1994,15 @@ async function refreshMessages(scroll) {
       hasMoreOlder = hasMore;
       renderMessages();
       if (scroll) scrollToBottom(true);
-      if (!hasMoreOlder) {
-        msgsEl.style.overscrollBehaviorY = 'none';
-      }
+      if (!hasMoreOlder) msgsEl.style.overscrollBehaviorY = 'none';
       return;
     }
 
     const nearBottom = isNearBottom();
-    applyMessagesUpdate(decoded);
+    const updatePromise = applyMessagesUpdate(decoded);   // ★ 不等待，让动画和滚动并行
     if (scroll && nearBottom) scrollToBottom(false);
+    await updatePromise;
   } catch (e) {
-    // 【关键】出错时也要校验
     if (!currentConv || currentConv.id !== convId) return;
     if (e.message !== '401' && !messageNodes.size) {
       msgsEl.innerHTML = '<div class="empty-state" style="color:var(--danger)">加载失败</div>';
@@ -2222,9 +2017,7 @@ async function loadOlderMessages() {
   if (!currentConv || loadingOlder || !hasMoreOlder) return;
   if (pollInFlight) return;
 
-  // 【关键】捕获发起时的对话 ID
   const convId = currentConv.id;
-
   const oldest = messages.find(m => !m.id.startsWith('tmp-'));
   if (!oldest) return;
 
@@ -2248,25 +2041,16 @@ async function loadOlderMessages() {
     const olderRaw = data.messages || [];
     const newHasMore = !!data.hasMore;
 
-    // 【关键】响应回来时校验：对话已切换 → 丢弃
-    if (!currentConv || currentConv.id !== convId) {
-      loader.remove();
-      return;
-    }
+    if (!currentConv || currentConv.id !== convId) { loader.remove(); return; }
 
     hasMoreOlder = newHasMore;
-
-    const olderDecoded = olderRaw.length
-      ? await Promise.all(olderRaw.map(decodeMsg))
-      : [];
+    const olderDecoded = olderRaw.length ? await Promise.all(olderRaw.map(decodeMsg)) : [];
     const existingIds = new Set(messages.map(m => m.id));
     const toInsert = olderDecoded.filter(m => !existingIds.has(m.id));
 
     const firstDayEl = msgsEl.querySelector('.day');
     if (firstDayEl && toInsert.length) {
-      if (new Date(toInsert[0].ts).toDateString() === firstDayEl.dataset.day) {
-        firstDayEl.remove();
-      }
+      if (new Date(toInsert[0].ts).toDateString() === firstDayEl.dataset.day) firstDayEl.remove();
     }
 
     const beforeH = msgsEl.scrollHeight;
@@ -2297,20 +2081,14 @@ async function loadOlderMessages() {
       loader.remove();
       msgsEl.insertBefore(fragment, msgsEl.firstChild);
       msgsEl.scrollTop = beforeT + (msgsEl.scrollHeight - beforeH);
-
-      messages = toInsert.concat(messages)
-        .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      messages = toInsert.concat(messages).sort((a, b) => (a.ts || 0) - (b.ts || 0));
     } else {
       const keepEls = [...msgsEl.querySelectorAll('.msg')];
       const prevPositions = new Map();
       keepEls.forEach(el => {
-        if (el.dataset.id) {
-          prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
-        }
+        if (el.dataset.id) prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
       });
-
       loader.remove();
-
       keepEls.forEach(el => {
         const id = el.dataset.id;
         if (!id) return;
@@ -2319,7 +2097,6 @@ async function loadOlderMessages() {
         const now = el.getBoundingClientRect().top;
         const delta = prev - now;
         if (Math.abs(delta) < 1) return;
-
         el.style.animation = 'none';
         el.style.transition = 'none';
         el.style.transform = `translateY(${delta}px)`;
@@ -2333,29 +2110,20 @@ async function loadOlderMessages() {
       });
     }
 
-    if (!hasMoreOlder) {
-      msgsEl.style.overscrollBehaviorY = 'none';
-    }
-
+    if (!hasMoreOlder) msgsEl.style.overscrollBehaviorY = 'none';
   } catch (e) {
     if (loader.isConnected) loader.remove();
     if (!currentConv || currentConv.id !== convId) return;
     if (e.message !== '401') showToast('加载更早消息失败', 'error');
   } finally {
-    // 【关键】只有当对话没变时才重置 loadingOlder，
-    // 避免把新对话的"正在加载"状态错误清空
-    if (currentConv && currentConv.id === convId) {
-      loadingOlder = false;
-    }
+    if (currentConv && currentConv.id === convId) loadingOlder = false;
   }
 }
 
 msgsEl.addEventListener('scroll', () => {
   if (!hasMoreOlder) return;
   if (loadingOlder) return;
-  if (msgsEl.scrollTop < LAZY_TRIGGER_PX) {
-    loadOlderMessages();
-  }
+  if (msgsEl.scrollTop < LAZY_TRIGGER_PX) loadOlderMessages();
 }, { passive: true });
 
 function renderMessage(m) {
@@ -2374,18 +2142,10 @@ function renderMessage(m) {
 
     const time = document.createElement('span');
     time.className = 'msg-time';
-    if (m._status === 'sending') {
-      time.classList.add('status-sending');
-      time.textContent = '发送中';
-    } else if (m._status === 'sent') {
-      time.classList.add('status-sent');
-      time.textContent = '已发送 ✓';
-    } else if (m._status === 'failed') {
-      time.classList.add('status-failed');
-      time.textContent = '发送失败';
-    } else {
-      time.textContent = fmtClock(m.ts);
-    }
+    if (m._status === 'sending') { time.classList.add('status-sending'); time.textContent = '发送中'; }
+    else if (m._status === 'sent') { time.classList.add('status-sent'); time.textContent = '已发送 ✓'; }
+    else if (m._status === 'failed') { time.classList.add('status-failed'); time.textContent = '发送失败'; }
+    else time.textContent = fmtClock(m.ts);
 
     const acts = document.createElement('div');
     acts.className = 'msg-acts';
@@ -2398,9 +2158,8 @@ function renderMessage(m) {
     copyBtn.innerHTML = copySvg;
     copyBtn.onclick = async () => {
       const text = m.text || '';
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch {
+      try { await navigator.clipboard.writeText(text); }
+      catch {
         const ta = document.createElement('textarea');
         ta.value = text;
         document.body.appendChild(ta);
@@ -2518,7 +2277,6 @@ function renderMessage(m) {
 function isNearBottom() {
   return msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 120;
 }
-
 function scrollToBottom(instant) {
   const target = Math.max(0, msgsEl.scrollHeight - msgsEl.clientHeight);
   if (instant) {
@@ -2528,15 +2286,12 @@ function scrollToBottom(instant) {
     msgsEl.style.scrollBehavior = prev;
     return;
   }
-
   const start = msgsEl.scrollTop;
   const dist = target - start;
   if (Math.abs(dist) < 1) return;
-
   const duration = 620;
   const t0 = performance.now();
   const ease = t => 1 - Math.pow(1 - t, 4);
-
   const step = (now) => {
     const p = Math.min((now - t0) / duration, 1);
     msgsEl.scrollTop = start + dist * ease(p);
@@ -2544,7 +2299,6 @@ function scrollToBottom(instant) {
   };
   requestAnimationFrame(step);
 }
-
 function downloadFile(m) {
   const a = document.createElement('a');
   a.href = `/api/files/${m.k}?name=${encodeURIComponent(m.n || 'file')}`;
@@ -2568,20 +2322,14 @@ async function startRename(card, nameEl, m) {
     if (done) return;
     done = true;
     const newName = input.value.trim();
-    if (!save || !newName || newName === oldName) {
-      input.replaceWith(nameEl);
-      return;
-    }
-
+    if (!save || !newName || newName === oldName) { input.replaceWith(nameEl); return; }
     m.n = newName;
     nameEl.textContent = newName;
     input.replaceWith(nameEl);
     nameEl.style.opacity = '.6';
-
     try {
       await api('PATCH', `/api/conversations/${currentConv.id}/messages/${m.id}`, {
-        headers: jsonHeaders,
-        body: JSON.stringify({ n: newName })
+        headers: jsonHeaders, body: JSON.stringify({ n: newName })
       });
       nameEl.style.opacity = '';
     } catch {
@@ -2599,21 +2347,18 @@ async function startRename(card, nameEl, m) {
 }
 
 /* ============================================================
- * 消息删除
+ * 消息删除（本地操作）
  * ============================================================ */
 async function deleteMessage(m, wrap) {
   if (!await confirmDialog(m.t === 'file' ? '删除这条文件消息？文件也会被删除。' : '删除这条消息？')) return;
 
-  // 防重复点击
   if (wrap.classList.contains('pending-delete') ||
       wrap.classList.contains('deleting')) return;
 
   const isLocal = m.id.startsWith('tmp-') || m._status === 'failed';
 
-  // 立即清除入场动画，释放 opacity 控制权 ——
   wrap.style.animation = 'none';
 
-  // 本地消息（无服务端）：跳过等待期，直接播动画
   if (isLocal) {
     decryptCache.delete(m.id);
     messageNodes.delete(m.id);
@@ -2626,11 +2371,9 @@ async function deleteMessage(m, wrap) {
 
   // 服务端消息：变暗，等服务端确认
   wrap.classList.add('pending-delete');
-
   try {
     await api('DELETE', `/api/conversations/${currentConv.id}/messages/${m.id}`);
   } catch {
-    // 失败：移除等待期状态，消息恢复显示
     wrap.classList.remove('pending-delete');
     showToast('删除失败', 'error');
     return;
@@ -2642,18 +2385,14 @@ async function deleteMessage(m, wrap) {
   messages = messages.filter(x => x.id !== m.id);
 
   await playIosDelete(wrap);
-
   await finalizeMessageDelete(wrap);
 }
 
-/* 消息删除：物理移除 + FLIP 补位 */
 async function finalizeMessageDelete(wrap) {
   const others = [...msgsEl.querySelectorAll('.msg')].filter(el => el !== wrap);
   const prevPositions = new Map();
   others.forEach(el => {
-    if (el.dataset.id) {
-      prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
-    }
+    if (el.dataset.id) prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
   });
 
   wrap.remove();
@@ -2680,7 +2419,6 @@ async function finalizeMessageDelete(wrap) {
   });
 
   if (anims.length) await Promise.all(anims);
-
   if (!msgsEl.querySelector('.msg')) renderMessages();
 }
 
@@ -2727,8 +2465,7 @@ async function sendTextOptimistic(text) {
   try {
     const enc = await encryptText(cryptoKey, text);
     const res = await (await api('POST', `/api/conversations/${currentConv.id}/messages`, {
-      headers: jsonHeaders,
-      body: JSON.stringify({ t: 'text', v: enc })
+      headers: jsonHeaders, body: JSON.stringify({ t: 'text', v: enc })
     })).json();
 
     msgData.id = res.id;
@@ -2749,10 +2486,7 @@ async function sendTextOptimistic(text) {
     msgEl.classList.add('failed');
     const timeEl = msgEl.querySelector('.msg-time');
     if (timeEl) await fadeSwap(timeEl, 'status-failed', '发送失败');
-
-    if (e.message !== '401') {
-      showToast('发送失败', 'error');
-    }
+    if (e.message !== '401') showToast('发送失败', 'error');
     throw e;
   }
 }
@@ -2770,7 +2504,6 @@ function addPendingFiles(files) {
     attachPreview.scrollLeft = attachPreview.scrollWidth;
   });
 }
-
 function renderAttachPreview() {
   if (!pendingFiles.length) {
     attachPreview.hidden = true;
@@ -2780,7 +2513,6 @@ function renderAttachPreview() {
   }
   attachPreview.hidden = false;
   attachPreview.innerHTML = '';
-
   pendingFiles.forEach((f) => {
     const chip = document.createElement('div');
     chip.className = 'attach-chip';
@@ -2805,7 +2537,6 @@ function renderAttachPreview() {
     };
     attachPreview.appendChild(chip);
   });
-
   updateSendState();
 }
 
@@ -2816,7 +2547,6 @@ const input = $('#input');
 const sendBtn = $('#sendBtn');
 const attachBtn = $('#attachBtn');
 const fileInput = $('#fileInput');
-
 const HOLE_DURATION = 400;
 
 function setSendBusy(busy) {
@@ -2832,7 +2562,6 @@ function setSendBusy(busy) {
     sendBtn.classList.remove('sending', 'spinning');
   }
 }
-
 function updateSendState() {
   const hasText = input.value.trim().length > 0;
   const hasFiles = pendingFiles.length > 0;
@@ -2883,7 +2612,6 @@ async function send() {
 
   sending = true;
   setSendBusy(true);
-
   input.value = '';
   input.style.height = 'auto';
   pendingFiles = [];
@@ -2891,16 +2619,9 @@ async function send() {
   updateSendState();
 
   let sentText = null;
-
   try {
-    if (text) {
-      try {
-        sentText = await sendTextOptimistic(text);
-      } catch (e) {}
-    }
-    if (files.length) {
-      await uploadAndSend(files);
-    }
+    if (text) { try { sentText = await sendTextOptimistic(text); } catch (e) {} }
+    if (files.length) await uploadAndSend(files);
     await loadConversations();
   } catch (e) {
   } finally {
@@ -2916,9 +2637,7 @@ async function send() {
         await fadeSwap(timeEl, 'status-sent', '已发送 ✓');
         await new Promise(r => setTimeout(r, 900));
         msgData._status = undefined;
-        if (timeEl.isConnected) {
-          await fadeSwap(timeEl, '', fmtClock(resTs));
-        }
+        if (timeEl.isConnected) await fadeSwap(timeEl, '', fmtClock(resTs));
       }
     }
   }
@@ -2930,15 +2649,12 @@ async function send() {
 function createUploadCard(file) {
   const wrap = document.createElement('div');
   wrap.className = 'msg file msg-enter';
-
   const card = document.createElement('div');
   card.className = 'file-card uploading';
   card.style.setProperty('--progress', '0%');
-
   const thumb = document.createElement('div');
   thumb.className = 'thumb';
   thumb.innerHTML = '<div class="spin"></div>';
-
   const info = document.createElement('div');
   info.className = 'info';
   const nameEl = document.createElement('div');
@@ -2949,14 +2665,12 @@ function createUploadCard(file) {
   metaEl.textContent = '准备上传…';
   info.appendChild(nameEl);
   info.appendChild(metaEl);
-
   card.appendChild(thumb);
   card.appendChild(info);
   wrap.appendChild(card);
   return { wrap, card, metaEl, thumb };
 }
 
-/* ---------- 单次直传（小文件） ---------- */
 function uploadFileDirect(file, expSec, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -2966,15 +2680,11 @@ function uploadFileDirect(file, expSec, onProgress) {
     xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
     xhr.setRequestHeader('X-File-Type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('X-Expires', expSec);
-
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
     };
     xhr.onload = () => {
-      if (xhr.status === 401) {
-        lockScreen('会话已失效，请重新解锁');
-        return reject(new Error('401'));
-      }
+      if (xhr.status === 401) { lockScreen('会话已失效，请重新解锁'); return reject(new Error('401')); }
       if (xhr.status >= 200 && xhr.status < 300) {
         try { resolve(JSON.parse(xhr.responseText)); }
         catch { reject(new Error('bad response')); }
@@ -2986,37 +2696,26 @@ function uploadFileDirect(file, expSec, onProgress) {
   });
 }
 
-/* ---------- 分片上传（大文件） ---------- */
-
 function uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx, attempt) {
   attempt = attempt || 0;
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const url = `/api/files/multipart/part?key=${encodeURIComponent(key)}`
-      + `&uploadId=${uploadId}`
-      + `&partNumber=${partNumber}`;
+      + `&uploadId=${uploadId}&partNumber=${partNumber}`;
     xhr.open('PUT', url);
     xhr.withCredentials = true;
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(e.loaded);
     };
-
     const retryOrFail = (err) => {
       if (attempt < MULTIPART_RETRY) {
         uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx, attempt + 1)
           .then(resolve, reject);
-      } else {
-        reject(err);
-      }
+      } else reject(err);
     };
-
     xhr.onload = () => {
-      if (xhr.status === 401) {
-        lockScreen('会话已失效，请重新解锁');
-        return reject(new Error('401'));
-      }
+      if (xhr.status === 401) { lockScreen('会话已失效，请重新解锁'); return reject(new Error('401')); }
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const data = JSON.parse(xhr.responseText);
@@ -3044,10 +2743,8 @@ function uploadOnePart(key, uploadId, partNumber, blob, onProgress, results, idx
 }
 
 async function uploadFileMultipart(file, expSec, onProgress) {
-  // 1. 计算分片大小
   let partSize = MULTIPART_PART_SIZE;
   let totalParts = Math.ceil(file.size / partSize);
-
   if (totalParts > MULTIPART_MAX_PARTS) {
     let bigger = Math.ceil(file.size / MULTIPART_MAX_PARTS);
     bigger = Math.ceil(bigger / (1024 * 1024)) * (1024 * 1024);
@@ -3055,24 +2752,17 @@ async function uploadFileMultipart(file, expSec, onProgress) {
     partSize = bigger;
     totalParts = Math.ceil(file.size / partSize);
   }
-  if (totalParts > 10000) {
-    throw new Error('文件过大（超过约 80 GB），暂不支持');
-  }
+  if (totalParts > 10000) throw new Error('文件过大（超过约 80 GB），暂不支持');
 
-  // 2. 创建 multipart session
   const createRes = await api('POST', '/api/files/multipart/create', {
     headers: jsonHeaders,
     body: JSON.stringify({
-      n: file.name,
-      m: file.type || 'application/octet-stream',
-      s: file.size,
-      e: expSec,
+      n: file.name, m: file.type || 'application/octet-stream',
+      s: file.size, e: expSec,
     }),
   });
   const sess = await createRes.json();
-  if (!sess || !sess.key || !sess.uploadId) {
-    throw new Error('创建上传会话失败');
-  }
+  if (!sess || !sess.key || !sess.uploadId) throw new Error('创建上传会话失败');
   const { key, uploadId } = sess;
 
   const partBytes = new Array(totalParts).fill(0);
@@ -3095,8 +2785,6 @@ async function uploadFileMultipart(file, expSec, onProgress) {
   };
 
   const partResults = new Array(totalParts);
-
-  // 3. 构造并并发上传分片
   const tasks = [];
   for (let i = 0; i < totalParts; i++) {
     const partNumber = i + 1;
@@ -3104,14 +2792,10 @@ async function uploadFileMultipart(file, expSec, onProgress) {
     const end = Math.min(start + partSize, file.size);
     const blob = file.slice(start, end);
     const slot = i;
-
     tasks.push(() => uploadOnePart(
       key, uploadId, partNumber, blob,
       (loaded) => {
-        if (loaded > partBytes[slot]) {
-          partBytes[slot] = loaded;
-          scheduleEmit();
-        }
+        if (loaded > partBytes[slot]) { partBytes[slot] = loaded; scheduleEmit(); }
       },
       partResults, slot
     ).then(() => {
@@ -3123,30 +2807,20 @@ async function uploadFileMultipart(file, expSec, onProgress) {
   let aborted = false;
   try {
     const partsRunResults = await runWithConcurrency(tasks, MULTIPART_CONCURRENCY);
-
-    // 4. 检查是否全部成功
     let okCount = 0;
-    for (let i = 0; i < partResults.length; i++) {
-      if (partResults[i]) okCount++;
-    }
+    for (let i = 0; i < partResults.length; i++) if (partResults[i]) okCount++;
     if (okCount !== totalParts) {
       aborted = true;
       let firstErrMsg = '';
       for (const r of partsRunResults) {
-        if (r && r.error) {
-          firstErrMsg = r.error.message || String(r.error);
-          break;
-        }
+        if (r && r.error) { firstErrMsg = r.error.message || String(r.error); break; }
       }
       throw new Error(
         `分片上传失败 (${okCount}/${totalParts})` +
         (firstErrMsg ? `：${firstErrMsg.slice(0, 120)}` : '')
       );
     }
-
-    // 5. 合并阶段
     if (onProgress) onProgress(0.99);
-
     const completeRes = await api('POST', '/api/files/multipart/complete', {
       headers: jsonHeaders,
       body: JSON.stringify({ key, uploadId, parts: partResults }),
@@ -3166,19 +2840,15 @@ async function uploadFileMultipart(file, expSec, onProgress) {
     if (aborted) {
       try {
         await api('POST', '/api/files/multipart/abort', {
-          headers: jsonHeaders,
-          body: JSON.stringify({ key, uploadId }),
+          headers: jsonHeaders, body: JSON.stringify({ key, uploadId }),
         });
       } catch {}
     }
   }
 }
 
-/* ---------- 统一入口：根据文件大小路由 ---------- */
 async function uploadFile(file, expSec, onProgress) {
-  if (file.size > DIRECT_UPLOAD_MAX) {
-    return uploadFileMultipart(file, expSec, onProgress);
-  }
+  if (file.size > DIRECT_UPLOAD_MAX) return uploadFileMultipart(file, expSec, onProgress);
   return uploadFileDirect(file, expSec, onProgress);
 }
 
@@ -3208,7 +2878,6 @@ async function uploadAndSend(files) {
     items.map(item => () => uploadOne(item, convId, expSec)),
     UPLOAD_CONCURRENCY
   );
-
   await loadConversations();
 }
 
@@ -3230,8 +2899,7 @@ async function uploadOne(item, convId, expSec) {
     const result = await (await api('POST', `/api/conversations/${convId}/messages`, {
       headers: jsonHeaders,
       body: JSON.stringify({
-        t: 'file',
-        k: meta.key,
+        t: 'file', k: meta.key,
         n: meta.name || file.name,
         s: meta.size || file.size,
         m: file.type || 'application/octet-stream',
@@ -3240,9 +2908,7 @@ async function uploadOne(item, convId, expSec) {
     })).json();
 
     const msgData = {
-      id: result.id,
-      t: 'file',
-      ts: result.ts,
+      id: result.id, t: 'file', ts: result.ts,
       k: meta.key,
       n: meta.name || file.name,
       s: meta.size || file.size,
@@ -3303,10 +2969,10 @@ document.addEventListener('keydown', e => {
  * 实时同步
  * ============================================================ */
 const POLL_FALLBACK_INTERVAL = 60_000;
-const WS_RECONNECT_BASE      = 1_000;
-const WS_RECONNECT_MAX       = 30_000;
-const SYNC_DEBOUNCE          = 300;
-const HEARTBEAT_INTERVAL     = 300_000;
+const WS_RECONNECT_BASE = 1_000;
+const WS_RECONNECT_MAX = 30_000;
+const SYNC_DEBOUNCE = 300;
+const HEARTBEAT_INTERVAL = 300_000;
 
 function startPolling() {
   stopPolling();
@@ -3316,82 +2982,57 @@ function stopPolling() {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
-let ws                   = null;
-let wsReconnectTimer     = null;
-let wsReconnectDelay     = WS_RECONNECT_BASE;
-let wsIntentionalClose   = false;
-let syncDebounceTimer    = null;
-let heartbeatTimer       = null;
+let ws = null;
+let wsReconnectTimer = null;
+let wsReconnectDelay = WS_RECONNECT_BASE;
+let wsIntentionalClose = false;
+let syncDebounceTimer = null;
+let heartbeatTimer = null;
 
 function connectWS() {
   disconnectWS();
   wsIntentionalClose = false;
-
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   let socket;
   try {
     socket = new WebSocket(`${proto}//${location.host}/api/ws`);
-  } catch {
-    scheduleReconnect();
-    return;
-  }
+  } catch { scheduleReconnect(); return; }
   ws = socket;
 
   socket.onopen = () => {
     wsReconnectDelay = WS_RECONNECT_BASE;
     startHeartbeat();
   };
-
   socket.onmessage = (e) => {
     if (e.data === 'pong') return;
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
-
-    if (msg.type === 'hello') {
-      debouncedSync();
-    } else if (msg.type === 'sync') {
-      if (currentConv && msg.convId === currentConv.id) {
-        debouncedSync();
-      }
+    if (msg.type === 'hello') debouncedSync();
+    else if (msg.type === 'sync') {
+      if (currentConv && msg.convId === currentConv.id) debouncedSync();
     } else if (msg.type === 'sync-conv') {
       loadConversations().catch(() => {});
     }
   };
-
   socket.onclose = () => {
     ws = null;
     stopHeartbeat();
     if (wsIntentionalClose) return;
     scheduleReconnect();
   };
-
-  socket.onerror = () => {
-    try { socket.close(); } catch {}
-  };
+  socket.onerror = () => { try { socket.close(); } catch {} };
 }
-
 function disconnectWS() {
   wsIntentionalClose = true;
-  if (wsReconnectTimer) {
-    clearTimeout(wsReconnectTimer);
-    wsReconnectTimer = null;
-  }
-  if (syncDebounceTimer) {
-    clearTimeout(syncDebounceTimer);
-    syncDebounceTimer = null;
-  }
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+  if (syncDebounceTimer) { clearTimeout(syncDebounceTimer); syncDebounceTimer = null; }
   stopHeartbeat();
-  if (ws) {
-    try { ws.close(); } catch {}
-    ws = null;
-  }
+  if (ws) { try { ws.close(); } catch {} ws = null; }
 }
-
 function ensureWS() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   connectWS();
 }
-
 function scheduleReconnect() {
   if (wsReconnectTimer) return;
   wsReconnectTimer = setTimeout(() => {
@@ -3401,7 +3042,6 @@ function scheduleReconnect() {
   }, wsReconnectDelay);
   wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_RECONNECT_MAX);
 }
-
 function debouncedSync() {
   if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(() => {
@@ -3413,7 +3053,6 @@ function debouncedSync() {
     refreshMessages(true).catch(() => {});
   }, SYNC_DEBOUNCE);
 }
-
 function startHeartbeat() {
   stopHeartbeat();
   heartbeatTimer = setInterval(() => {
@@ -3426,7 +3065,6 @@ function startHeartbeat() {
 function stopHeartbeat() {
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
 }
-
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   if (currentConv) {
@@ -3434,17 +3072,13 @@ document.addEventListener('visibilitychange', () => {
     ensureWS();
   }
 });
-
 async function pollMessages() {
   if (!currentConv || document.hidden || pollInFlight) return;
   if (sending) return;
   if (loadingOlder) return;
   pollInFlight = true;
-  try {
-    await refreshMessages(true);
-  } finally {
-    pollInFlight = false;
-  }
+  try { await refreshMessages(true); }
+  finally { pollInFlight = false; }
 }
 
 /* ============================================================
@@ -3454,11 +3088,8 @@ const MIN_BOOT = 720;
 
 async function boot() {
   await loadConversations();
-  if (conversations.length) {
-    await openConversation(conversations[0].id);
-  } else {
-    await createConversation();
-  }
+  if (conversations.length) await openConversation(conversations[0].id);
+  else await createConversation();
   updateSendState();
   connectWS();
   startPolling();
@@ -3471,7 +3102,6 @@ async function init() {
     if (rest > 0) await new Promise(r => setTimeout(r, rest));
     fn();
   };
-
   try {
     const key = await loadKey();
     if (key) {
@@ -3488,7 +3118,6 @@ async function init() {
       await clearStoredKey();
     }
   } catch {}
-
   await settle(() => showBootLogin());
 }
 

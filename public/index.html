@@ -1985,7 +1985,7 @@ async function refreshMessages(scroll) {
 
     if (!currentConv || currentConv.id !== convId) return;
 
-    if (messageNodes.size === 0) {
+    if (messageNodes.size === 0 && !msgsEl.querySelector('.msg')) {
       messages = decoded;
       hasMoreOlder = hasMore;
       renderMessages();

@@ -207,7 +207,7 @@ svg{display:block}
 
 /* 等待期：变暗（服务端尚未确认） */
 .conv-item.pending-delete{
-  opacity:.65;         /* 0.85 → 0.65 */
+  opacity:.75;
   pointer-events:none;
 }
 /* 播放删除动画：模糊 + 缩小 + 渐隐（定义在 pending-delete 之后，
@@ -215,7 +215,7 @@ svg{display:block}
 .conv-item.deleting{
   pointer-events:none;
   filter:blur(10px);
-  transform:scale(.95);
+  transform:scale(.88);
   opacity:0;
 }
 
@@ -338,9 +338,6 @@ svg{display:block}
 .msg{
   display:flex;flex-direction:column;align-items:flex-start;
   max-width:100%;
-  /* ★ 新增：让 .msg 盒子收缩到内容宽度。
-     这样 transform-origin: center center 才是围绕气泡自身中心缩放，
-     而不是围绕整行（全宽盒子）的中心缩放。 */
   width:fit-content;
   filter:blur(0px);
   will-change:filter,transform,opacity;
@@ -352,7 +349,7 @@ svg{display:block}
 
 /* 等待期：变暗 */
 .msg.pending-delete{
-  opacity:.65;         /* 0.85 → 0.65 */
+  opacity:.75;         /* 0.85 → 0.65 */
   pointer-events:none;
 }
 /* 播放删除动画：模糊 + 缩小 + 渐隐。
@@ -360,8 +357,8 @@ svg{display:block}
    由于 .msg 加了 width:fit-content，center center 就是气泡本身的中心。 */
 .msg.deleting{
   pointer-events:none;
-  filter:blur(15px);
-  transform:scale(.92);
+  filter:blur(10px);
+  transform:scale(.88);
   opacity:0;
 }
 

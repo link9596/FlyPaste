@@ -207,7 +207,7 @@ svg{display:block}
 
 /* 等待期：变暗（服务端尚未确认） */
 .conv-item.pending-delete{
-  opacity:.85;
+  opacity:.65;         /* 0.85 → 0.65 */
   pointer-events:none;
 }
 /* 播放删除动画：模糊 + 缩小 + 渐隐（定义在 pending-delete 之后，
@@ -338,6 +338,10 @@ svg{display:block}
 .msg{
   display:flex;flex-direction:column;align-items:flex-start;
   max-width:100%;
+  /* ★ 新增：让 .msg 盒子收缩到内容宽度。
+     这样 transform-origin: center center 才是围绕气泡自身中心缩放，
+     而不是围绕整行（全宽盒子）的中心缩放。 */
+  width:fit-content;
   filter:blur(0px);
   will-change:filter,transform,opacity;
   transition:
@@ -348,13 +352,14 @@ svg{display:block}
 
 /* 等待期：变暗 */
 .msg.pending-delete{
-  opacity:.85;
+  opacity:.65;         /* 0.85 → 0.65 */
   pointer-events:none;
 }
-/* 播放删除动画：模糊 + 缩小 + 渐隐 */
+/* 播放删除动画：模糊 + 缩小 + 渐隐。
+   注意：不再指定 transform-origin，使用默认的 center center ——
+   由于 .msg 加了 width:fit-content，center center 就是气泡本身的中心。 */
 .msg.deleting{
   pointer-events:none;
-  transform-origin:left center;
   filter:blur(15px);
   transform:scale(.92);
   opacity:0;
@@ -411,6 +416,7 @@ svg{display:block}
   background:rgba(248,113,113,.04);
 }
 
+/* 文件消息保持全宽（覆盖 .msg 的 fit-content） */
 .msg.file{width:100%;}
 
 .file-card{
@@ -1364,15 +1370,19 @@ function addDayDivider(ts) {
  * iOS 风格删除动画（消息 + 对话共用）
  * ============================================================
  * 关键点：
- *  1. 先把入场动画清掉。因为 animation-fill-mode: both 会让动画的
- *     最后一帧（opacity:1）永久覆盖 .deleting 的 opacity:0。
- *  2. pending-delete 和 deleting 同时存在时，CSS 里 .deleting 定义在
+ *  1. 先清入场动画（msg-enter / msg-enter-old），因为 animation-fill-mode: both
+ *     会让动画的最后一帧（opacity:1）永久覆盖 .deleting 的 opacity:0。
+ *  2. ★ void el.offsetHeight 强制同步重排：把"清入场动画"和"加 deleting class"
+ *     分离成两次独立的样式计算，保证 transition 有明确的"起始态→目标态"。
+ *     没有这一步，跨设备删除时浏览器会把两次修改合并到同一帧，transition
+ *     根本不会触发，元素直接跳到 opacity:0 然后被移除 —— 看起来就是"瞬间消失"。
+ *  3. pending-delete 和 deleting 同时存在时，CSS 里 .deleting 定义在
  *     .pending-delete 之后，保证目标状态（opacity:0）生效。
- *  3. duration 参数允许消息和对话使用不同时长。
  */
 function playIosDelete(el, duration) {
   const dur = duration || DELETE_ANIM_MS;
   el.style.animation = 'none';
+  void el.offsetHeight;   // ★ 强制重排：固化起始态
   el.classList.add('deleting');
   return new Promise(resolve => setTimeout(resolve, dur));
 }
@@ -1385,7 +1395,6 @@ function initDropdown(el) {
   const label   = el.querySelector('.dd-label');
   const options = Array.from(el.querySelectorAll('.dd-option'));
 
-  // ★ 显式同步：以 dataset.value 为准，设置 selected class 和 label 文本
   const currentValue = el.dataset.value;
   let currentIdx = options.findIndex(o => o.dataset.value === currentValue);
   if (currentIdx < 0) currentIdx = options.findIndex(o => o.classList.contains('selected'));
@@ -1594,8 +1603,7 @@ function openConvMenu(conv, anchor) {
     renderConvList();
     try {
       await api('PATCH', '/api/conversations/' + conv.id, {
-        headers: jsonHeaders,
-        body: JSON.stringify({ pinned: conv.pinned })
+        headers: jsonHeaders, body: JSON.stringify({ pinned: conv.pinned })
       });
     } catch {
       conv.pinned = oldPinned;
@@ -1618,7 +1626,6 @@ function openConvMenu(conv, anchor) {
     if (!item) return;
     if (item.classList.contains('pending-delete') || item.classList.contains('deleting')) return;
 
-    // 进入等待期：变暗
     item.classList.add('pending-delete');
 
     try {
@@ -1636,7 +1643,6 @@ function openConvMenu(conv, anchor) {
     const wasCurrent = currentConv?.id === conv.id;
     conversations = conversations.filter(c => c.id !== conv.id);
 
-    // ★ 对话删除用更短的动画时长（CONV_DELETE_ANIM_MS），补位更早
     await playIosDelete(item, CONV_DELETE_ANIM_MS);
     await finalizeConvDelete(item);
 
@@ -1834,7 +1840,6 @@ function renderMessages() {
   }
 }
 
-/* ★ 改为 async —— 处理 toRemove 时播放 iOS 删除动画 */
 async function applyMessagesUpdate(newList) {
   const nowTs = Date.now();
   for (const [id, ts] of pendingLocalIds) {
@@ -1860,7 +1865,6 @@ async function applyMessagesUpdate(newList) {
     if (el) toRemove.push({ id: oldId, el });
   }
 
-  // 记录 keepEls 位置（FLIP 起点）
   const keepEls = [...msgsEl.querySelectorAll('.msg')]
     .filter(el => !toRemove.some(r => r.el === el));
   const prevPositions = new Map();
@@ -1868,7 +1872,6 @@ async function applyMessagesUpdate(newList) {
     if (el.dataset.id) prevPositions.set(el.dataset.id, el.getBoundingClientRect().top);
   });
 
-  // 处理重命名
   const oldMap = new Map(messages.map(m => [m.id, m]));
   for (const m of newList) {
     const old = oldMap.get(m.id);
@@ -1880,7 +1883,6 @@ async function applyMessagesUpdate(newList) {
     }
   }
 
-  // 处理新增消息（同步添加 + 入场动画）
   const added = newList.filter(m => !oldIds.has(m.id));
   if (added.length) {
     const lastDayEl = [...msgsEl.querySelectorAll('.day')].pop();
@@ -1906,7 +1908,6 @@ async function applyMessagesUpdate(newList) {
     }
   }
 
-  // 先更新 messages 数组
   const protectedMsgs = [];
   for (const m of messages) {
     if (newIds.has(m.id)) continue;
@@ -1918,7 +1919,6 @@ async function applyMessagesUpdate(newList) {
   combined.sort((a, b) => (a.ts || 0) - (b.ts || 0));
   messages = combined;
 
-  // ★ 处理删除：播放 iOS 删除动画（异步），完成后再 FLIP 补位
   if (toRemove.length) {
     const removals = toRemove.map(({ id, el }) => {
       messageNodes.delete(id);
@@ -1927,7 +1927,6 @@ async function applyMessagesUpdate(newList) {
 
     await Promise.all(removals);
 
-    // FLIP 补位
     keepEls.forEach(el => {
       const id = el.dataset.id;
       if (!id) return;
@@ -1999,7 +1998,7 @@ async function refreshMessages(scroll) {
     }
 
     const nearBottom = isNearBottom();
-    const updatePromise = applyMessagesUpdate(decoded);   // ★ 不等待，让动画和滚动并行
+    const updatePromise = applyMessagesUpdate(decoded);
     if (scroll && nearBottom) scrollToBottom(false);
     await updatePromise;
   } catch (e) {
@@ -2011,7 +2010,7 @@ async function refreshMessages(scroll) {
 }
 
 /* ============================================================
- * 懒加载：向服务端请求更早的消息
+ * 懒加载
  * ============================================================ */
 async function loadOlderMessages() {
   if (!currentConv || loadingOlder || !hasMoreOlder) return;
@@ -2358,6 +2357,7 @@ async function deleteMessage(m, wrap) {
   const isLocal = m.id.startsWith('tmp-') || m._status === 'failed';
 
   wrap.style.animation = 'none';
+  void wrap.offsetHeight;
 
   if (isLocal) {
     decryptCache.delete(m.id);
@@ -2369,7 +2369,6 @@ async function deleteMessage(m, wrap) {
     return;
   }
 
-  // 服务端消息：变暗，等服务端确认
   wrap.classList.add('pending-delete');
   try {
     await api('DELETE', `/api/conversations/${currentConv.id}/messages/${m.id}`);

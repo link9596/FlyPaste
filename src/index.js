@@ -14,7 +14,7 @@ const MAX_TS = 9999999999999;         // 13 位数字上限，用于反向时间
 const MULTIPART_PART_SIZE = 8 * 1024 * 1024;   // 8 MiB，前端按此切分
 const MULTIPART_MIN_PART = 5 * 1024 * 1024;    // R2 硬性下限
 const MULTIPART_MAX_PARTS = 10000;             // R2 硬性上限
-const UPLOAD_ID_MAX_LEN = 4096;                // R2 uploadId 实测 ~335，放宽到 4096
+const UPLOAD_ID_MAX_LEN = 4096;                // R2 uploadId
 
 const SAFE_INLINE_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/gif',

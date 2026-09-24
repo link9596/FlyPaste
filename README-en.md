@@ -67,6 +67,10 @@ English · [简体中文](./README.md)
 3. **Visit & unlock**: open your Worker domain and enter the password — it is used both for authentication and for deriving the encryption key.
 4. **Start pasting**: create a conversation, paste text or drag in files; other devices see changes in real time.
 
+⚠️⚠️ We recommended to use HTTPS to access, otherwise login may fail.
+
+It's suggested to enable 'Always Use HTTPS' under SSL/TLS > Edge Certificates.
+
 ---
 
 ## Security Notes

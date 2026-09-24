@@ -6,14 +6,14 @@
 
 在不同设备间实时同步文本与文件。一个密码即可解锁属于你的加密空间。
 
-简体中文 · [English](./README.en.md) 
+简体中文 · [English](./README-en.md) 
 
 [![GitHub license](https://img.shields.io/github/license/link9596/FlyPaste)](https://github.com/link9596/FlyPaste/blob/main/LICENSE)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/link9596/one-bucket)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/link9596/FlyPaste)
 
 [**⌨️ 快速开始**](#快速开始) · [**☁️ 在线预览**](https://r2-file.lkin.cn/web/demo/FlyPaste-demo.html) · [**💬 反馈**](https://github.com/link9596/FlyPaste/issues) · [**🛡️ 安全**](#安全说明)
 
